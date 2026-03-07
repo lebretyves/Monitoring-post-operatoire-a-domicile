@@ -1,0 +1,182 @@
+{
+  "version": "1.0",
+  "tick_seconds": 5,
+  "mqtt": {
+    "topic_template": "patients/{patient_id}/vitals",
+    "qos": 1
+  },
+  "noise": {
+    "hr_sd": 1.4,
+    "spo2_sd": 0.5,
+    "sbp_sd": 2.2,
+    "dbp_sd": 1.8,
+    "rr_sd": 0.8,
+    "temp_sd": 0.05
+  },
+  "clamp": {
+    "hr": [40, 180],
+    "spo2": [75, 100],
+    "sbp": [60, 200],
+    "dbp": [35, 130],
+    "rr": [8, 40],
+    "temp": [35.0, 41.0]
+  },
+  "default_normal_baseline": { "hr": 76, "spo2": 98, "sbp": 124, "dbp": 77, "rr": 16, "temp": 36.8 },
+  "scenario_catalog": {
+    "recovery_copy_patient1": {
+      "label": "Constantes Normales",
+      "calculation_mode": "reference_stable_from_example",
+      "stabilize_to_baseline": true,
+      "stabilize_factor": 0.1,
+      "noise_override": { "hr_sd": 2.0, "spo2_sd": 0.5, "sbp_sd": 3.0, "dbp_sd": 2.0, "rr_sd": 1.0, "temp_sd": 0.1 },
+      "clamp_override": { "hr": [40, 180], "spo2": [70, 100], "sbp": [70, 200], "dbp": [40, 130], "rr": [8, 40], "temp": [35.0, 42.0] },
+      "copied_for": "PAT-001",
+      "timeline": [
+        {
+          "phase": "postop_recovery",
+          "duration_minutes": 45,
+          "trend_per_10min": { "hr": 0, "spo2": 0, "sbp": 0, "dbp": 0, "rr": 0, "temp": 0 }
+        },
+        {
+          "phase": "plateau",
+          "duration_minutes": 60,
+          "trend_per_10min": { "hr": 0, "spo2": 0, "sbp": 0, "dbp": 0, "rr": 0, "temp": 0 }
+        }
+      ]
+    },
+    "pneumonia_ira": {
+      "label": "Pneumopathie ou IRA post-op progressive",
+      "copied_from_source_json": true,
+      "timeline": [
+        {
+          "phase": "early_ira",
+          "duration_minutes": 25,
+          "trend_per_10min": { "temp": 0.05 },
+          "target_shift": { "spo2": -3, "rr": 6, "hr": 10, "sbp": -2, "dbp": -1, "temp": 0.2 },
+          "adaptation_rate": 0.18
+        },
+        {
+          "phase": "worsening",
+          "duration_minutes": 15,
+          "trend_per_10min": { "temp": 0.08 },
+          "target_shift": { "spo2": -7, "rr": 12, "hr": 16, "sbp": -4, "dbp": -2, "temp": 0.5 },
+          "adaptation_rate": 0.22
+        }
+      ]
+    },
+    "hemorrhage_j2": {
+      "label": "Hemorragie J+2 realiste apres colectomie",
+      "copied_from_source_json": true,
+      "timeline": [
+        {
+          "phase": "compensated_bleed",
+          "duration_minutes": 30,
+          "trend_per_10min": { "temp": -0.03 },
+          "target_shift": { "hr": 18, "sbp": -5, "dbp": -1, "rr": 4, "temp": -0.1 },
+          "adaptation_rate": 0.16
+        },
+        {
+          "phase": "decompensation",
+          "duration_minutes": 10,
+          "instant_jump": { "sbp": -10, "dbp": -5, "hr": 8, "rr": 2 },
+          "trend_per_10min": {},
+          "target_shift": { "hr": 30, "sbp": -25, "dbp": -14, "rr": 8, "temp": -0.2, "spo2": -1 },
+          "adaptation_rate": 0.3
+        }
+      ],
+      "rebleed_pattern": {
+        "stable_period_minutes": 30,
+        "then": { "instant_jump": { "hr": 15, "sbp": -20 } }
+      }
+    },
+    "pulmonary_embolism": {
+      "label": "Embolie pulmonaire brutale",
+      "copied_from_source_json": true,
+      "timeline": [
+        {
+          "phase": "sudden_event",
+          "duration_minutes": 5,
+          "instant_jump": { "spo2": -6, "rr": 10, "hr": 18, "sbp": -8, "dbp": -6 },
+          "target_shift": { "spo2": -8, "rr": 12, "hr": 22, "sbp": -10, "dbp": -6 },
+          "adaptation_rate": 0.28
+        },
+        {
+          "phase": "persisting_instability",
+          "duration_minutes": 20,
+          "trend_per_10min": {},
+          "target_shift": { "spo2": -10, "rr": 14, "hr": 24, "sbp": -14, "dbp": -10 },
+          "adaptation_rate": 0.18
+        }
+      ]
+    },
+    "sepsis_progressive": {
+      "label": "Sepsis progressive puis bascule hemodynamique",
+      "copied_from_source_json": true,
+      "timeline": [
+        {
+          "phase": "early_inflammation",
+          "duration_minutes": 40,
+          "trend_per_10min": { "temp": 0.06 },
+          "target_shift": { "temp": 0.7, "hr": 10, "rr": 6, "sbp": -2, "dbp": -8, "spo2": -1 },
+          "adaptation_rate": 0.14
+        },
+        {
+          "phase": "vasoplegia_bascule",
+          "duration_minutes": 20,
+          "trend_per_10min": { "temp": 0.04 },
+          "target_shift": { "temp": 1.0, "hr": 22, "rr": 8, "sbp": -12, "dbp": -16, "spo2": -2 },
+          "adaptation_rate": 0.22
+        }
+      ]
+    },
+    "pain_postop_uncontrolled": {
+      "label": "Douleur post-op non controlee",
+      "added_demo_scenario": true,
+      "timeline": [
+        {
+          "phase": "pain_escalation",
+          "duration_minutes": 20,
+          "instant_jump": { "hr": 8, "sbp": 8, "dbp": 5, "rr": 2 },
+          "trend_per_10min": {},
+          "target_shift": { "hr": 18, "sbp": 16, "dbp": 10, "rr": 4, "temp": 0.1, "spo2": 0.0 },
+          "adaptation_rate": 0.2
+        },
+        {
+          "phase": "persistent_nociception",
+          "duration_minutes": 20,
+          "trend_per_10min": {},
+          "target_shift": { "hr": 12, "sbp": 10, "dbp": 6, "rr": 3, "temp": 0.0, "spo2": 0.0 },
+          "adaptation_rate": 0.14
+        }
+      ]
+    },
+    "cardiac_postop_complication": {
+      "label": "Complication cardiaque post-op",
+      "added_demo_scenario": true,
+      "timeline": [
+        {
+          "phase": "hemodynamic_instability_onset",
+          "duration_minutes": 10,
+          "instant_jump": { "hr": 20, "sbp": -16, "dbp": -10, "spo2": -2, "rr": 3 },
+          "trend_per_10min": {},
+          "target_shift": { "hr": 28, "sbp": -24, "dbp": -14, "spo2": -3, "rr": 4, "temp": 0.0 },
+          "adaptation_rate": 0.3
+        },
+        {
+          "phase": "low_output_state",
+          "duration_minutes": 20,
+          "trend_per_10min": {},
+          "target_shift": { "hr": 36, "sbp": -34, "dbp": -20, "spo2": -5, "rr": 6, "temp": 0.0 },
+          "adaptation_rate": 0.22
+        }
+      ]
+    }
+  },
+  "patient_plan": [
+    { "patient_id": "PAT-001", "scenario": "recovery_copy_patient1" },
+    { "patient_id": "PAT-002", "scenario": "pneumonia_ira" },
+    { "patient_id": "PAT-003", "scenario": "hemorrhage_j2" },
+    { "patient_id": "PAT-004", "scenario": "pulmonary_embolism" },
+    { "patient_id": "PAT-005", "scenario": "sepsis_progressive" }
+  ]
+}

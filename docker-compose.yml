@@ -1,0 +1,198 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: postop-mosquitto
+    restart: unless-stopped
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    volumes:
+      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h 127.0.0.1 -p 1883 -t healthcheck -m ok -q 0 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - postop-net
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: postop-influxdb
+    restart: unless-stopped
+    ports:
+      - "${INFLUX_PORT:-8086}:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_USERNAME:-admin}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_PASSWORD:-admin12345}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:-postop}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET:-vitals}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:-postop-monitoring-token}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping", "--host", "http://127.0.0.1:8086"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - postop-net
+
+  postgres:
+    image: postgres:16
+    container_name: postop-postgres
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postop}
+      POSTGRES_USER: ${POSTGRES_USER:-postop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postop}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postop} -d ${POSTGRES_DB:-postop}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - postop-net
+
+  backend:
+    build:
+      context: ./services/backend
+    container_name: postop-backend
+    restart: unless-stopped
+    environment:
+      MQTT_HOST: ${MQTT_HOST:-mosquitto}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_QOS: ${MQTT_QOS:-1}
+      MQTT_KEEPALIVE: ${MQTT_KEEPALIVE:-60}
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_ORG: ${INFLUX_ORG:-postop}
+      INFLUX_BUCKET: ${INFLUX_BUCKET:-vitals}
+      INFLUX_TOKEN: ${INFLUX_TOKEN:-postop-monitoring-token}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-postop}
+      POSTGRES_USER: ${POSTGRES_USER:-postop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postop}
+      ALERT_RULES_PATH: /app/config/alert_rules.json
+      SIMULATION_CONFIG_PATH: /app/config/simulation_scenarios.json
+      PATIENTS_SEED_PATH: /app/config/patients_seed.json
+      BACKEND_PORT: ${BACKEND_PORT:-8000}
+      FRONTEND_ORIGIN: http://localhost:${FRONTEND_PORT:-5173}
+      HISTORY_DEFAULT_HOURS: ${HISTORY_DEFAULT_HOURS:-24}
+      ENABLE_ML: ${ENABLE_ML:-true}
+      ENABLE_LLM: ${ENABLE_LLM:-false}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-20}
+    volumes:
+      - ./config:/app/config:ro
+      - ./:/workspace:ro
+      - ./runtime:/app/runtime
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - postop-net
+
+  simulator:
+    build:
+      context: ./services/simulator
+    container_name: postop-simulator
+    restart: unless-stopped
+    environment:
+      MQTT_HOST: ${MQTT_HOST:-mosquitto}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_QOS: ${MQTT_QOS:-1}
+      MQTT_KEEPALIVE: ${MQTT_KEEPALIVE:-60}
+      SIMULATION_CONFIG_PATH: /app/config/simulation_scenarios.json
+      PATIENTS_SEED_PATH: /app/config/patients_seed.json
+      ALERT_RULES_PATH: /app/config/alert_rules.json
+      SIMULATOR_TICK_SECONDS: ${SIMULATOR_TICK_SECONDS:-5}
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, socket; s=socket.socket(); s.settimeout(3); s.connect((os.getenv('MQTT_HOST', 'mosquitto'), int(os.getenv('MQTT_PORT', '1883')))); s.close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - postop-net
+
+  frontend:
+    build:
+      context: ./services/frontend
+    container_name: postop-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: http://localhost:${BACKEND_PORT:-8000}
+      VITE_WS_URL: ws://localhost:${BACKEND_PORT:-8000}/ws/live
+      FRONTEND_PORT: ${FRONTEND_PORT:-5173}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - postop-net
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: postop-ollama
+    restart: unless-stopped
+    profiles:
+      - llm
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+      - ${OLLAMA_GGUF_HOST_DIR:-./models}:/models:ro
+      - ./infra/ollama:/modelfiles
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - postop-net
+
+networks:
+  postop-net:
+    driver: bridge
+
+volumes:
+  influxdb-data:
+  postgres-data:
+  ollama-data:

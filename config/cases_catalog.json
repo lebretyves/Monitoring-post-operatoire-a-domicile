@@ -1,0 +1,159 @@
+{
+  "version": "1.0",
+  "stable_reference_case_id": "case_stable_reference",
+  "surgery_weighting": {
+    "strong": 70,
+    "medium": 20,
+    "weak": 10
+  },
+  "cases": [
+    {
+      "case_id": "case_stable_reference",
+      "case_label": "Patient temoin sain",
+      "source": "reference_example",
+      "full_name": "Alice Martin",
+      "age": 41,
+      "room": "A101",
+      "profile": "baseline_normale",
+      "risk_level": "surveillance_postop",
+      "surgery_type": "cholecystectomie laparoscopique",
+      "postop_day": 1,
+      "scenario": "recovery_copy_patient1",
+      "history": ["HTA legere", "post-op simple"],
+      "notes": "Cas de reference stable pour ouvrir la demo sans alerte pathologique.",
+      "baseline": { "hr": 72, "spo2": 98, "sbp": 125, "dbp": 78, "rr": 16, "temp": 36.8 }
+    },
+    {
+      "case_id": "case_pneumonia_hip",
+      "case_label": "Pneumopathie / IRA post-op",
+      "case_label_template": "Pneumopathie / IRA post-op apres {surgery_type}",
+      "source": "json_source",
+      "full_name": "Bilal Neri",
+      "age": 67,
+      "room": "A102",
+      "profile": "baseline_normale",
+      "risk_level": "surveillance_postop",
+      "surgery_type": "chirurgie thoracique",
+      "postop_day": 2,
+      "scenario": "pneumonia_ira",
+      "history": ["BPCO moderee", "ancien fumeur"],
+      "notes": "Complication respiratoire progressive apres chirurgie majeure.",
+      "baseline": { "hr": 78, "spo2": 97, "sbp": 126, "dbp": 76, "rr": 16, "temp": 36.9 },
+      "surgery_pool": {
+        "strong": ["chirurgie thoracique", "oesophagectomie", "chirurgie abdominale haute ouverte"],
+        "medium": ["gastrectomie", "hepatectomie", "pancreatectomie"],
+        "weak": ["colectomie"]
+      }
+    },
+    {
+      "case_id": "case_hemorrhage_colectomy",
+      "case_label": "Hemorragie post-op",
+      "case_label_template": "Hemorragie post-op apres {surgery_type}",
+      "source": "json_source",
+      "full_name": "Claire Dubreuil",
+      "age": 58,
+      "room": "A103",
+      "profile": "baseline_normale",
+      "risk_level": "surveillance_postop",
+      "surgery_type": "colectomie",
+      "postop_day": 2,
+      "scenario": "hemorrhage_j2",
+      "history": ["anemie chronique", "anticoagulation prophylactique"],
+      "notes": "Cas cle pour la demo des alertes hemodynamiques.",
+      "baseline": { "hr": 76, "spo2": 98, "sbp": 124, "dbp": 77, "rr": 15, "temp": 36.8 },
+      "surgery_pool": {
+        "strong": ["colectomie", "hepatectomie", "pancreatectomie", "chirurgie vasculaire majeure"],
+        "medium": ["chirurgie thoracique", "bypass bariatrique"],
+        "weak": ["chirurgie pelvienne majeure"]
+      }
+    },
+    {
+      "case_id": "case_pe_knee",
+      "case_label": "Embolie pulmonaire post-op",
+      "case_label_template": "Embolie pulmonaire apres {surgery_type}",
+      "source": "json_source",
+      "full_name": "David Morel",
+      "age": 73,
+      "room": "A104",
+      "profile": "baseline_normale",
+      "risk_level": "surveillance_postop",
+      "surgery_type": "arthroplastie du genou",
+      "postop_day": 3,
+      "scenario": "pulmonary_embolism",
+      "history": ["obesite", "TVP ancienne"],
+      "notes": "Cas a presentation brutale avec desaturation et tachycardie.",
+      "baseline": { "hr": 80, "spo2": 97, "sbp": 124, "dbp": 76, "rr": 16, "temp": 36.9 },
+      "surgery_pool": {
+        "strong": ["arthroplastie du genou", "arthroplastie de hanche", "chirurgie de fracture de hanche"],
+        "medium": ["chirurgie pelvienne oncologique", "bypass bariatrique"],
+        "weak": ["chirurgie thoracique"]
+      }
+    },
+    {
+      "case_id": "case_sepsis_colorectal",
+      "case_label": "Sepsis progressif post-op",
+      "case_label_template": "Sepsis progressif apres {surgery_type}",
+      "source": "json_source",
+      "full_name": "Emma Roussel",
+      "age": 62,
+      "room": "A105",
+      "profile": "baseline_normale",
+      "risk_level": "surveillance_postop",
+      "surgery_type": "chirurgie colorectale",
+      "postop_day": 3,
+      "scenario": "sepsis_progressive",
+      "history": ["diabete type 2", "IMC 31", "infection urinaire recente"],
+      "notes": "Fievre, tachycardie puis baisse hemodynamique.",
+      "baseline": { "hr": 79, "spo2": 97, "sbp": 123, "dbp": 75, "rr": 16, "temp": 36.9 },
+      "surgery_pool": {
+        "strong": ["chirurgie colorectale", "resection anterieure basse", "colectomie"],
+        "medium": ["gastrectomie", "chirurgie pancreatique"],
+        "weak": ["hepatectomie"]
+      }
+    },
+    {
+      "case_id": "case_pain_postop",
+      "case_label": "Douleur post-op non controlee",
+      "case_label_template": "Douleur post-op non controlee apres {surgery_type}",
+      "source": "added_demo_scenario",
+      "full_name": "Nora Petit",
+      "age": 39,
+      "room": "A106",
+      "profile": "baseline_normale",
+      "risk_level": "surveillance_postop",
+      "surgery_type": "chirurgie thoracique",
+      "postop_day": 1,
+      "scenario": "pain_postop_uncontrolled",
+      "history": ["anxiete", "consommation chronique d'antalgiques"],
+      "notes": "Tachycardie, hausse tensionnelle et polypnee legere sans signe infectieux.",
+      "baseline": { "hr": 74, "spo2": 98, "sbp": 122, "dbp": 76, "rr": 15, "temp": 36.8 },
+      "surgery_pool": {
+        "strong": ["thoracotomie", "resection pulmonaire", "laparotomie abdominale haute"],
+        "medium": ["colectomie", "gastrectomie"],
+        "weak": ["arthroplastie du genou"]
+      }
+    },
+    {
+      "case_id": "case_cardiac_postop",
+      "case_label": "Complication cardiaque post-op",
+      "case_label_template": "Complication cardiaque post-op apres {surgery_type}",
+      "source": "added_demo_scenario",
+      "full_name": "Marc Delcourt",
+      "age": 76,
+      "room": "A107",
+      "profile": "baseline_normale",
+      "risk_level": "surveillance_postop",
+      "surgery_type": "chirurgie vasculaire majeure",
+      "postop_day": 1,
+      "scenario": "cardiac_postop_complication",
+      "history": ["coronaropathie", "HTA", "fibrillation atriale paroxystique"],
+      "notes": "Instabilite hemodynamique evocatrice d'une complication cardiaque post-operatoire.",
+      "baseline": { "hr": 77, "spo2": 97, "sbp": 126, "dbp": 78, "rr": 16, "temp": 36.8 },
+      "surgery_pool": {
+        "strong": ["chirurgie vasculaire majeure", "chirurgie vasculaire ouverte", "chirurgie thoracique majeure"],
+        "medium": ["chirurgie colorectale ouverte", "gastrectomie", "chirurgie abdominale oncologique majeure"],
+        "weak": ["arthroplastie de hanche"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+[
+  {
+    "id": "PAT-001",
+    "full_name": "Alice Martin",
+    "profile": "baseline_normale",
+    "risk_level": "surveillance_postop",
+    "room": "A101",
+    "age": 41,
+    "surgery_type": "cholecystectomie laparoscopique",
+    "postop_day": 1,
+    "scenario": "recovery_copy_patient1",
+    "history": ["HTA legere", "post-op simple"],
+    "notes": "Patient 1 garde une trajectoire stable pour lancer la demo.",
+    "baseline": { "hr": 72, "spo2": 98, "sbp": 125, "dbp": 78, "rr": 16, "temp": 36.8 }
+  },
+  {
+    "id": "PAT-002",
+    "full_name": "Bilal Neri",
+    "profile": "baseline_normale",
+    "risk_level": "surveillance_postop",
+    "room": "A102",
+    "age": 67,
+    "surgery_type": "chirurgie thoracique",
+    "postop_day": 2,
+    "scenario": "pneumonia_ira",
+    "history": ["BPCO moderee", "ancien fumeur"],
+    "notes": "Scenario source JSON reutilise pour la demo respiratoire.",
+    "baseline": { "hr": 78, "spo2": 97, "sbp": 126, "dbp": 76, "rr": 16, "temp": 36.9 }
+  },
+  {
+    "id": "PAT-003",
+    "full_name": "Claire Dubreuil",
+    "profile": "baseline_normale",
+    "risk_level": "surveillance_postop",
+    "room": "A103",
+    "age": 58,
+    "surgery_type": "colectomie",
+    "postop_day": 2,
+    "scenario": "hemorrhage_j2",
+    "history": ["anemie chronique", "anticoagulation prophylactique"],
+    "notes": "Hemorragie J+2, cas cle pour la demo des alertes hemodynamiques.",
+    "baseline": { "hr": 76, "spo2": 98, "sbp": 124, "dbp": 77, "rr": 15, "temp": 36.8 }
+  },
+  {
+    "id": "PAT-004",
+    "full_name": "David Morel",
+    "profile": "baseline_normale",
+    "risk_level": "surveillance_postop",
+    "room": "A104",
+    "age": 73,
+    "surgery_type": "arthroplastie du genou",
+    "postop_day": 3,
+    "scenario": "pulmonary_embolism",
+    "history": ["obesite", "TVP ancienne"],
+    "notes": "Scenario source JSON reutilise pour la demo de composite SpO2 + FC.",
+    "baseline": { "hr": 80, "spo2": 97, "sbp": 124, "dbp": 76, "rr": 16, "temp": 36.9 }
+  },
+  {
+    "id": "PAT-005",
+    "full_name": "Emma Roussel",
+    "profile": "baseline_normale",
+    "risk_level": "surveillance_postop",
+    "room": "A105",
+    "age": 62,
+    "surgery_type": "chirurgie colorectale",
+    "postop_day": 3,
+    "scenario": "sepsis_progressive",
+    "history": ["diabete type 2", "IMC 31", "infection urinaire recente"],
+    "notes": "Patient 5 ajoute pour une demonstration sepsis progressive avec fievre, tachycardie et baisse hemodynamique.",
+    "baseline": { "hr": 79, "spo2": 97, "sbp": 123, "dbp": 75, "rr": 16, "temp": 36.9 }
+  }
+]

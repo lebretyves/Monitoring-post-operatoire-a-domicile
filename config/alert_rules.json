@@ -1,0 +1,213 @@
+{
+  "version": "1.0",
+  "sampling_seconds": 5,
+  "default_cooldown_seconds": 60,
+  "levels": ["INFO", "WARNING", "CRITICAL"],
+  "thresholds": {
+    "spo2": { "info": 94, "warning": 92, "critical": 90 },
+    "hr": { "info": 105, "warning": 120, "critical": 135 },
+    "sbp": { "info": 100, "warning": 90, "critical": 80 },
+    "map": { "warning": 70, "critical": 65 },
+    "rr": { "info": 22, "warning": 28, "critical": 30 },
+    "temp": { "info": 38.0, "warning": 38.5, "critical": 39.0, "low_critical": 36.0 },
+    "shock_index": { "warning": 0.9, "critical": 1.0 }
+  },
+  "default_uncertainty": {
+    "false_positive_risk": "medium",
+    "false_negative_risk": "medium",
+    "remeasure_minutes": { "INFO": 10, "WARNING": 5, "CRITICAL": 0 },
+    "false_positive_examples": [
+      "variation transitoire",
+      "artefact de mesure",
+      "contexte clinique incomplet"
+    ],
+    "false_negative_examples": [
+      "phase tres precoce",
+      "degradation encore compensee",
+      "variables cliniques manquantes"
+    ]
+  },
+  "uncertainty_profiles": {
+    "recovery_copy_patient1": {
+      "false_positive_risk": "high",
+      "false_negative_risk": "low",
+      "remeasure_minutes": { "INFO": 15, "WARNING": 10, "CRITICAL": 5 },
+      "false_positive_examples": [
+        "artefact SpO2",
+        "tachycardie transitoire",
+        "bruit de mesure"
+      ],
+      "false_negative_examples": [
+        "evenement brutal non encore mesure"
+      ]
+    },
+    "pneumonia_ira": {
+      "false_positive_risk": "medium",
+      "false_negative_risk": "medium",
+      "remeasure_minutes": { "INFO": 10, "WARNING": 5, "CRITICAL": 0 },
+      "false_positive_examples": [
+        "douleur post-op",
+        "hypoventilation transitoire",
+        "mauvaise qualite de capteur SpO2"
+      ],
+      "false_negative_examples": [
+        "debut discret",
+        "SpO2 encore preservee au debut"
+      ]
+    },
+    "pulmonary_embolism": {
+      "false_positive_risk": "medium",
+      "false_negative_risk": "high",
+      "remeasure_minutes": { "INFO": 5, "WARNING": 5, "CRITICAL": 0 },
+      "false_positive_examples": [
+        "pneumopathie",
+        "anxiete aigue",
+        "douleur thoracique non embolique"
+      ],
+      "false_negative_examples": [
+        "phase initiale peu bruyante",
+        "desaturation encore limitee"
+      ]
+    },
+    "sepsis_progressive": {
+      "false_positive_risk": "medium",
+      "false_negative_risk": "high",
+      "remeasure_minutes": { "INFO": 10, "WARNING": 5, "CRITICAL": 0 },
+      "false_positive_examples": [
+        "reaction inflammatoire post-op simple",
+        "douleur post-op",
+        "fievre non infectieuse"
+      ],
+      "false_negative_examples": [
+        "absence initiale de fievre",
+        "hypotension tardive",
+        "sepsis precoce encore compense"
+      ]
+    },
+    "hemorrhage_j2": {
+      "false_positive_risk": "low",
+      "false_negative_risk": "high",
+      "remeasure_minutes": { "INFO": 10, "WARNING": 5, "CRITICAL": 0 },
+      "false_positive_examples": [
+        "tachycardie de douleur",
+        "stress post-op aigu"
+      ],
+      "false_negative_examples": [
+        "hemorragie compensee",
+        "PA encore normale au debut"
+      ]
+    },
+    "pain_postop_uncontrolled": {
+      "false_positive_risk": "high",
+      "false_negative_risk": "low",
+      "remeasure_minutes": { "INFO": 10, "WARNING": 10, "CRITICAL": 5 },
+      "false_positive_examples": [
+        "sepsis debutant",
+        "hemorragie moderee",
+        "anxiete"
+      ],
+      "false_negative_examples": [
+        "reponse antalgique recente"
+      ]
+    },
+    "cardiac_postop_complication": {
+      "false_positive_risk": "high",
+      "false_negative_risk": "high",
+      "remeasure_minutes": { "INFO": 10, "WARNING": 5, "CRITICAL": 0 },
+      "false_positive_examples": [
+        "douleur post-op",
+        "hypovolemie",
+        "anxiete"
+      ],
+      "false_negative_examples": [
+        "atteinte cardiaque peu visible sur constantes simples",
+        "absence d'ECG et de biomarqueurs"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "id": "OXYGEN_INFO",
+      "level": "INFO",
+      "title": "Desaturation moderee",
+      "message": "SpO2 <= 94% sur 30 secondes",
+      "cooldown_seconds": 60,
+      "logic": {
+        "all": [
+          { "metric": "spo2", "op": "<=", "value": 94, "duration_seconds": 30 }
+        ]
+      }
+    },
+    {
+      "id": "OXYGEN_WARNING",
+      "level": "WARNING",
+      "title": "Desaturation soutenue",
+      "message": "SpO2 < 92% sur 60 secondes",
+      "logic": {
+        "all": [
+          { "metric": "spo2", "op": "<", "value": 92, "duration_seconds": 60 }
+        ]
+      }
+    },
+    {
+      "id": "FEVER_WARNING",
+      "level": "WARNING",
+      "title": "Fievre post-operatoire",
+      "message": "Temperature >= 38.5C avec FC >= 110",
+      "logic": {
+        "all": [
+          { "metric": "temp", "op": ">=", "value": 38.5, "duration_seconds": 120 },
+          { "metric": "hr", "op": ">=", "value": 110, "duration_seconds": 120 }
+        ]
+      }
+    },
+    {
+      "id": "HEMODYNAMIC_WARNING",
+      "level": "WARNING",
+      "title": "Hypoperfusion possible",
+      "message": "MAP < 70 ou shock index >= 0.9",
+      "logic": {
+        "any": [
+          { "metric": "map", "op": "<", "value": 70, "duration_seconds": 180 },
+          { "metric": "shock_index", "op": ">=", "value": 0.9, "duration_seconds": 180 }
+        ]
+      }
+    },
+    {
+      "id": "HEMORRHAGE_J2_CRITICAL",
+      "level": "CRITICAL",
+      "title": "Hemorragie J+2 probable",
+      "message": "FC augmente et SBP chute sur 10 minutes",
+      "logic": {
+        "all": [
+          { "metric": "hr", "trend": { "delta": 15, "window_minutes": 10 } },
+          { "metric": "sbp", "trend": { "delta": -15, "window_minutes": 10 } }
+        ]
+      }
+    },
+    {
+      "id": "RESPIRATORY_CRITICAL",
+      "level": "CRITICAL",
+      "title": "Detresse respiratoire",
+      "message": "SpO2 < 90% et FR >= 30 sur 60 secondes",
+      "logic": {
+        "all": [
+          { "metric": "spo2", "op": "<", "value": 90, "duration_seconds": 60 },
+          { "metric": "rr", "op": ">=", "value": 30, "duration_seconds": 60 }
+        ]
+      }
+    },
+    {
+      "id": "COMPOSITE_SPO2_DOWN_HR_UP",
+      "level": "CRITICAL",
+      "title": "Composite SpO2 baisse + FC monte",
+      "message": "SpO2 baisse d'au moins 3 points sur 10 minutes avec FC >= 110",
+      "logic": {
+        "all": [
+          { "metric": "spo2", "trend": { "delta": -3, "window_minutes": 10 } },
+          { "metric": "hr", "op": ">=", "value": 110, "duration_seconds": 60 }
+        ]
+      }
+    }
+  ]
+}

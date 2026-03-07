@@ -1,0 +1,10 @@
+flowchart LR
+    Simulator[Python simulator\n5 patients] -->|MQTT QoS 1\npatients/{id}/vitals| Mosquitto[ Mosquitto ]
+    Mosquitto --> Backend[FastAPI backend\nconsumer + alert engine]
+    Backend -->|write vitals| Influx[(InfluxDB bucket: vitals)]
+    Backend -->|patients, alerts, notes| Postgres[(PostgreSQL)]
+    Backend -->|REST| Frontend[React dashboard]
+    Backend -->|WebSocket live| Frontend
+    Backend --> ML[IsolationForest optional]
+    Backend --> LLM[Ollama optional]
+    Frontend --> Export[CSV/PDF placeholder]

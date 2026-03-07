@@ -1,0 +1,17 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.coverage
+node_modules/
+dist/
+build/
+.vite/
+.DS_Store
+coverage/
+*.log
+runtime/*
+!runtime/.gitkeep
+models/*.gguf
+infra/ollama/Modelfile.local
