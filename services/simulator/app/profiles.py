@@ -44,12 +44,15 @@ def build_scenarios(config: dict) -> dict[str, ScenarioDefinition]:
         ]
         scenarios[name] = ScenarioDefinition(name=name, label=item["label"], timeline=timeline)
         scenarios[name].calculation_mode = item.get("calculation_mode", "default")
+        scenarios[name].repeat_timeline = bool(item.get("repeat_timeline", False))
         scenarios[name].noise_multiplier = float(item.get("noise_multiplier", 1.0))
         scenarios[name].stabilize_to_baseline = bool(item.get("stabilize_to_baseline", False))
         scenarios[name].stabilize_factor = float(item.get("stabilize_factor", 0.0))
         scenarios[name].baseline_override = item.get("baseline_override")
         scenarios[name].noise_override = item.get("noise_override")
         scenarios[name].clamp_override = item.get("clamp_override")
+        scenarios[name].initial_shift_by_postop_day = item.get("initial_shift_by_postop_day")
+        scenarios[name].onset_delay_range_minutes = item.get("onset_delay_range_minutes")
     return scenarios
 
 

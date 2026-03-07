@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
+from datetime import datetime, timedelta, timezone
 from typing import Any
 import random
 from dataclasses import dataclass, field, replace
@@ -29,14 +30,22 @@ class PatientSimulator:
     noise: dict[str, float]
     clamp: dict[str, tuple[float, float]]
     tick_seconds: int
+    simulated_elapsed_minutes: int
+    history_sample_minutes: int
     current_values: dict[str, float] = field(init=False)
     phase_index: int = 0
     ticks_in_phase: int = 0
+    total_ticks: int = 0
     battery: int = 100
     instant_jump_done: bool = False
+    onset_delay_ticks: int = field(init=False, default=0)
 
     def __post_init__(self) -> None:
         self.current_values = dict(self.baseline)
+        if self.scenario.onset_delay_range_minutes and len(self.scenario.onset_delay_range_minutes) == 2:
+            low_minutes, high_minutes = self.scenario.onset_delay_range_minutes
+            selected_minutes = random.uniform(float(low_minutes), float(high_minutes))
+            self.onset_delay_ticks = max(0, int((selected_minutes * 60) / self.tick_seconds))
 
     def _active_phase(self):
         if self.phase_index >= len(self.scenario.timeline):
@@ -50,6 +59,10 @@ class PatientSimulator:
             return
         if self.phase_index < len(self.scenario.timeline) - 1:
             self.phase_index += 1
+            self.ticks_in_phase = 0
+            self.instant_jump_done = False
+        elif self.scenario.repeat_timeline:
+            self.phase_index = 0
             self.ticks_in_phase = 0
             self.instant_jump_done = False
 
@@ -105,16 +118,19 @@ class PatientSimulator:
             values["dbp"] = max(dbp_low, int(values["sbp"] - min_pulse_pressure))
         return values
 
-    def step(self) -> VitalPayload:
-        self._apply_phase()
-        noisy = self._apply_noise_and_clamp()
-        self.battery = max(55, self.battery - random.choice([0, 0, 1]))
-        self.ticks_in_phase += 1
-        self._advance_phase_if_needed()
+    def _current_postop_day(self) -> int:
+        simulated_minutes = (self.total_ticks * self.tick_seconds) / 60.0
+        return min(3, max(0, int(simulated_minutes // (24 * 60))))
 
+    @staticmethod
+    def _isoformat(timestamp: datetime) -> str:
+        return timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def _build_payload(self, timestamp: str, *, is_historical: bool) -> VitalPayload:
+        noisy = self._apply_noise_and_clamp()
         map_value = int(round(noisy["dbp"] + ((noisy["sbp"] - noisy["dbp"]) / 3.0)))
         return VitalPayload(
-            ts=utc_now_iso(),
+            ts=timestamp,
             patient_id=self.patient.id,
             profile=self.patient.profile,
             scenario=self.patient.scenario,
@@ -128,9 +144,51 @@ class PatientSimulator:
             temp=float(noisy["temp"]),
             room=self.patient.room,
             battery=self.battery,
-            postop_day=self.patient.postop_day,
+            postop_day=self._current_postop_day(),
             surgery_type=self.patient.surgery_type,
+            is_historical=is_historical,
         )
+
+    def _advance_tick(self) -> None:
+        if self.total_ticks >= self.onset_delay_ticks:
+            self._apply_phase()
+        self.battery = max(55, self.battery - random.choice([0, 0, 1]))
+        if self.total_ticks >= self.onset_delay_ticks:
+            self.ticks_in_phase += 1
+            self._advance_phase_if_needed()
+        self.total_ticks += 1
+
+    def build_history(self, reference_ts: datetime) -> tuple[list[VitalPayload], VitalPayload]:
+        total_history_ticks = max(0, int((self.simulated_elapsed_minutes * 60) / self.tick_seconds))
+        sample_interval_ticks = max(1, int((self.history_sample_minutes * 60) / self.tick_seconds))
+        history_start = reference_ts - timedelta(minutes=self.simulated_elapsed_minutes)
+        history_points: list[VitalPayload] = []
+
+        if total_history_ticks > 0:
+            history_points.append(
+                self._build_payload(
+                    self._isoformat(history_start),
+                    is_historical=True,
+                )
+            )
+
+        for tick_index in range(total_history_ticks):
+            self._advance_tick()
+            if (tick_index + 1) % sample_interval_ticks != 0:
+                continue
+            sample_ts = history_start + timedelta(seconds=(tick_index + 1) * self.tick_seconds)
+            history_points.append(self._build_payload(self._isoformat(sample_ts), is_historical=True))
+
+        current_payload = self._build_payload(self._isoformat(reference_ts), is_historical=False)
+        return history_points, current_payload
+
+    def step(self) -> VitalPayload:
+        self._advance_tick()
+        return self._build_payload(utc_now_iso(), is_historical=False)
+
+
+def _default_elapsed_minutes(postop_day: int) -> int:
+    return max(0, int(postop_day)) * 24 * 60 + (12 * 60)
 
 
 def build_patient_simulators(
@@ -142,6 +200,7 @@ def build_patient_simulators(
     noise = config["noise"]
     clamp = {key: tuple(value) for key, value in config["clamp"].items()}
     tick_seconds = int(config.get("tick_seconds", 5))
+    history_sample_minutes = int(config.get("history_seed_interval_minutes", 15))
     default_baseline = dict(config.get("default_normal_baseline", DEFAULT_NORMAL_BASELINE))
     simulators: list[PatientSimulator] = []
     patient_field_names = {item.name for item in fields(PatientSeed)}
@@ -174,6 +233,13 @@ def build_patient_simulators(
                 noise=effective_noise,
                 clamp=clamp,
                 tick_seconds=tick_seconds,
+                simulated_elapsed_minutes=int(
+                    assignment.get(
+                        "simulated_elapsed_minutes",
+                        _default_elapsed_minutes(int(resolved_patient.postop_day)),
+                    )
+                ),
+                history_sample_minutes=history_sample_minutes,
             )
         )
     return simulators

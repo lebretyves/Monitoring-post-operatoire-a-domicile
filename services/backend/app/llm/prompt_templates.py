@@ -22,7 +22,7 @@ Signes de gravite immediate a considerer:
 - PAS < 90 mmHg ou TAM < 65 mmHg
 - FR >= 30/min
 - FC >= 130/min
-- T°C >= 39.0 ou < 36.0 avec alteration clinique
+- T C >= 39.0 ou < 36.0 avec alteration clinique
 - douleur thoracique
 - detresse respiratoire
 - alteration de conscience
@@ -60,21 +60,45 @@ Tu reponds uniquement avec un objet JSON conforme au schema fourni.
 """.strip()
 
 
-def _format_recent_points(recent_points: list[dict[str, Any]]) -> str:
-    if not recent_points:
+def _format_course_points(points: list[dict[str, Any]]) -> str:
+    if not points:
         return "aucune tendance disponible"
+    indices = sorted({0, len(points) // 3, (2 * len(points)) // 3, len(points) - 1})
     lines: list[str] = []
-    for point in recent_points[-12:]:
+    for index in indices:
+        point = points[index]
         values = point.get("values", {})
         lines.append(
             f"- {point.get('ts')}: FC={values.get('hr')}, SpO2={values.get('spo2')}, "
             f"SBP={values.get('sbp')}, DBP={values.get('dbp')}, TAM={values.get('map')}, "
-            f"FR={values.get('rr')}, T°C={values.get('temp')}"
+            f"FR={values.get('rr')}, T C={values.get('temp')}"
         )
     return "\n".join(lines)
 
 
-def build_summary_prompt(patient: dict, last_vitals: dict, alerts: list[dict]) -> str:
+def _course_summary(points: list[dict[str, Any]]) -> str:
+    if not points:
+        return "historique depuis J0 non disponible"
+    start_values = points[0].get("values", {})
+    end_values = points[-1].get("values", {})
+    return (
+        "Evolution depuis J0: "
+        f"FC {start_values.get('hr')} -> {end_values.get('hr')} bpm, "
+        f"SpO2 {start_values.get('spo2')} -> {end_values.get('spo2')}%, "
+        f"SBP {start_values.get('sbp')} -> {end_values.get('sbp')} mmHg, "
+        f"DBP {start_values.get('dbp')} -> {end_values.get('dbp')} mmHg, "
+        f"TAM {start_values.get('map')} -> {end_values.get('map')} mmHg, "
+        f"FR {start_values.get('rr')} -> {end_values.get('rr')}/min, "
+        f"T C {start_values.get('temp')} -> {end_values.get('temp')}."
+    )
+
+
+def build_summary_prompt(
+    patient: dict[str, Any],
+    last_vitals: dict[str, Any],
+    alerts: list[dict[str, Any]],
+    history_points: list[dict[str, Any]],
+) -> str:
     return (
         "Analyse ce cas de surveillance post-operatoire a domicile.\n"
         "Redige uniquement en francais.\n"
@@ -88,7 +112,8 @@ def build_summary_prompt(patient: dict, last_vitals: dict, alerts: list[dict]) -
         f"Dernieres constantes: FC {last_vitals.get('hr')} bpm, SpO2 {last_vitals.get('spo2')}%, "
         f"SBP {last_vitals.get('sbp')} mmHg, DBP {last_vitals.get('dbp')} mmHg, "
         f"TAM {int(round(float(last_vitals.get('map', 0))))} mmHg, FR {last_vitals.get('rr')}/min, "
-        f"T°C {last_vitals.get('temp')}.\n"
+        f"T C {last_vitals.get('temp')}.\n"
+        f"{_course_summary(history_points)}\n"
         f"Alertes recentes: {alerts[:5]}\n"
         "Aucune source RAG n'est fournie dans cette requete.\n"
     )
@@ -111,7 +136,7 @@ def build_scenario_review_prompt(
         f"Scenario courant: {last_vitals.get('scenario_label') or last_vitals.get('scenario')}\n"
         f"Constantes actuelles: {last_vitals}\n"
         f"Alertes recentes: {alerts[:5]}\n"
-        f"Derniers points de tendance:\n{_format_recent_points(recent_points)}\n"
+        f"Evolution de J0 a maintenant:\n{_format_course_points(recent_points)}\n"
         "Aucune source RAG n'est fournie dans cette requete.\n"
         "Retourne uniquement un objet JSON conforme au schema fourni."
     )

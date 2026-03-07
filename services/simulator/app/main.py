@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import signal
 import time
+from datetime import datetime, timezone
 from threading import Event, Lock
 
 from app.mqtt_client import MqttPublisher
@@ -16,6 +17,15 @@ RUNNING = True
 def stop_handler(signum, frame) -> None:
     global RUNNING
     RUNNING = False
+
+
+def publish_case_history(publisher: MqttPublisher, simulators) -> None:
+    reference_ts = datetime.now(timezone.utc)
+    for simulator in simulators:
+        history_points, current_payload = simulator.build_history(reference_ts)
+        for payload in history_points:
+            publisher.publish_vital(simulator.patient.id, payload.to_dict())
+        publisher.publish_vital(simulator.patient.id, current_payload.to_dict())
 
 
 def main() -> None:
@@ -45,6 +55,7 @@ def main() -> None:
             return
         with simulators_lock:
             simulators = build_patient_simulators(config, patients, scenarios, assignments=assignment_map)
+            publish_case_history(publisher, simulators)
         refresh_event.set()
         print("Population refreshed:")
         for simulator in simulators:
@@ -57,6 +68,8 @@ def main() -> None:
     print(f"Simulator started with {len(simulators)} patients and tick={tick_seconds}s")
     for simulator in simulators:
         print(f"- {simulator.patient.id}: {simulator.patient.scenario}")
+    with simulators_lock:
+        publish_case_history(publisher, simulators)
 
     try:
         while RUNNING:

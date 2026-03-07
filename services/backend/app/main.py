@@ -15,6 +15,7 @@ from app.ml.anomaly import AnomalyService
 from app.ml.criticity_service import CriticityMLService
 from app.mqtt.consumer import MQTTConsumer
 from app.routers import alerts, export, llm, ml, patients, summaries, trends
+from app.routers.patients import _build_refresh_assignments, _default_monitoring_level
 from app.settings import load_settings
 from app.storage.influx import InfluxStorage, MemoryInfluxStorage
 from app.storage.postgres import MemoryPostgresStorage, PostgresStorage
@@ -77,6 +78,31 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
         )
         if not settings.test_mode:
             consumer.start()
+            await asyncio.sleep(1)
+            patient_ids = [patient["id"] for patient in postgres.list_patients()]
+            if patient_ids:
+                assignments = _build_refresh_assignments(
+                    settings.simulation_config_path,
+                    settings.cases_catalog_path,
+                    patient_ids,
+                )
+                for patient_id in patient_ids:
+                    influx.clear_patient_history(patient_id)
+                    last_vitals.pop(patient_id, None)
+                consumer.publish_refresh_request(assignments)
+                for assignment in assignments:
+                    postgres.update_patient_case(
+                        patient_id=str(assignment["patient_id"]),
+                        payload={
+                            "full_name": assignment["full_name"],
+                            "profile": assignment["profile"],
+                            "surgery_type": assignment["surgery_type"],
+                            "postop_day": assignment["postop_day"],
+                            "risk_level": assignment.get("risk_level", _default_monitoring_level()),
+                            "room": assignment["room"],
+                            "history": assignment.get("history", []),
+                        },
+                    )
         try:
             yield
         finally:

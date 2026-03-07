@@ -7,6 +7,7 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 
+from app.ml.features import derive_course_features
 from app.mqtt.schemas import VitalPayload
 from app.mqtt.topics import SIMULATOR_REFRESH_TOPIC, parse_patient_topic
 from app.ws.events import alert_event, vitals_event
@@ -74,9 +75,13 @@ class MQTTConsumer:
             reading["map"] = reading["dbp"] + ((reading["sbp"] - reading["dbp"]) / 3.0)
         reading["map"] = int(round(float(reading["map"])))
         reading["shock_index"] = round(reading["hr"] / max(1, reading["sbp"]), 2)
+        self.influx.write_vital(reading)
+        if reading.get("is_historical"):
+            return
+        history_points = self.influx.query_history(patient_id=patient_id, metric="all", hours=0)
+        course_features = derive_course_features(history_points)
         self.state.push(reading)
         self.last_vitals[patient_id] = reading
-        self.influx.write_vital(reading)
         generated_alerts = list(self.alert_engine.evaluate(reading))
         self.ml_service.record_vital_sample(
             {
@@ -84,6 +89,7 @@ class MQTTConsumer:
                 "pathology": reading.get("scenario_label") or reading.get("scenario"),
                 "alert_count": len(generated_alerts),
                 "has_critical": int(any(alert["level"] == "CRITICAL" for alert in generated_alerts)),
+                **course_features,
             }
         )
         asyncio.run_coroutine_threadsafe(self.ws_manager.broadcast(vitals_event(reading)), self.loop)

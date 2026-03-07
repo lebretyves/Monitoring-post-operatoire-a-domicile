@@ -5,6 +5,8 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.ml.features import derive_course_features
+
 
 router = APIRouter(prefix="/api/ml", tags=["ml"])
 
@@ -46,13 +48,14 @@ def _current_alert_snapshot(services, last_vitals: dict) -> tuple[int, int]:
     return sum(1 for flag in active_flags if flag), has_critical
 
 
-def _build_ml_sample(services, patient_id: str) -> tuple[dict, dict, dict]:
+def _build_ml_sample(services, patient_id: str) -> tuple[dict, dict, dict, list[dict]]:
     patient = services.postgres.get_patient(patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
     last_vitals = services.last_vitals.get(patient_id)
     if not last_vitals:
         raise HTTPException(status_code=404, detail="No vitals yet")
+    history_points = services.influx.query_history(patient_id=patient_id, metric="all", hours=0)
     pathology = (
         last_vitals.get("scenario_label")
         or last_vitals.get("scenario")
@@ -60,6 +63,7 @@ def _build_ml_sample(services, patient_id: str) -> tuple[dict, dict, dict]:
         or "Cas clinique non renseigne"
     )
     alert_count, has_critical = _current_alert_snapshot(services, last_vitals)
+    course_features = derive_course_features(history_points)
     sample = {
         "timestamp": last_vitals["ts"],
         "patient_id": patient_id,
@@ -76,14 +80,15 @@ def _build_ml_sample(services, patient_id: str) -> tuple[dict, dict, dict]:
         "respiratory_rate": last_vitals.get("rr", 0),
         "alert_count": alert_count,
         "has_critical": has_critical,
+        **course_features,
     }
-    return patient, last_vitals, sample
+    return patient, last_vitals, sample, history_points
 
 
 @router.get("/{patient_id}/predict")
 def predict_patient_criticity(patient_id: str, request: Request):
     services = request.app.state.services
-    patient, last_vitals, sample = _build_ml_sample(services, patient_id)
+    patient, last_vitals, sample, history_points = _build_ml_sample(services, patient_id)
     probability = services.ml_service.predict(sample)
     return {
         "patient_id": patient_id,
@@ -93,6 +98,8 @@ def predict_patient_criticity(patient_id: str, request: Request):
         "model_ready": probability is not None,
         "sample": sample,
         "last_vitals": last_vitals,
+        "history_points": len(history_points),
+        "course_window": "J0_to_now",
         "recent_feedback": services.postgres.list_ml_feedback(
             pathology=sample["pathology"],
             surgery_type=sample["surgery_type"],
@@ -131,7 +138,7 @@ def train_criticity_model(request: Request):
 @router.post("/{patient_id}/feedback")
 def store_ml_feedback(patient_id: str, payload: MLFeedbackRequest, request: Request):
     services = request.app.state.services
-    _, _, sample = _build_ml_sample(services, patient_id)
+    _, _, sample, _ = _build_ml_sample(services, patient_id)
     if payload.pathology:
         sample["pathology"] = payload.pathology
 

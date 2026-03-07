@@ -159,6 +159,67 @@ Ces sources viennent du JSON clinique source fourni pour les regles et seuils. E
 - Preferer les societes savantes, recommandations, hopitaux universitaires et revues indexees.
 - Si une source sert a une affirmation precise, ajouter une note de une ligne expliquant ce qu'elle soutient.
 
+## Recalibrage temporel du simulateur
+
+Le recalibrage du 7 mars 2026 suit une logique de priorisation des sources primaires. Nous n'avons pas retenu un scraping massif et heterogene de "100 sites", car cela degrade la qualite methodologique en medical. La calibration repose plutot sur les references deja documentees ci-dessus, avec compression du temps clinique reel vers un temps de demo.
+
+Principe retenu:
+
+- conserver l'ordre physiopathologique des evenements
+- conserver une logique `chirurgie + jour post-op + complication plausible`
+- compresser l'observation pour la demo sans casser le sens clinique des jours `J0 -> J3`
+- garder les scenarios brutaux comme brutaux
+- ralentir les scenarios progressifs pour qu'ils ne se stabilisent plus en moins d'une minute
+
+Implementation retenue:
+
+- le `refresh` tire maintenant un `jour post-op` aleatoire `J0 -> J3` pour chaque cas
+- ce tirage est pondere par complication dans `cases_catalog.json`
+- les scenarios progressifs utilisent des `initial_shift_by_postop_day` pour representer un etat deja plus avance a `J2/J3`
+- les scenarios abrupts utilisent un `onset_delay_range_minutes` aleatoire, pour pouvoir survenir a n'importe quel moment pendant la surveillance
+
+Choix retenus par complication:
+
+- `pneumonia_ira`
+  - base documentaire: MAPAR hypoxemie post-op, HUG pneumonie, litterature chirurgie thoracique et abdominale haute
+  - lecture retenue: la degradation est d'abord respiratoire
+  - ordre attendu: `SpO2` puis `FR`, puis `FC`, puis baisse tensionnelle moderee secondaire
+  - traduction simulateur: progression `J0 -> J1 -> J2 -> J3` compressee dans la demo, avec aggravation respiratoire de plus en plus marquee
+
+- `pulmonary_embolism`
+  - base documentaire: recommandations ESC/ERS et SFAR thromboembolique
+  - lecture retenue: evenement souvent brutal, avec desaturation, tachycardie, tachypnee; l'hypotension severe signe la gravite
+  - ordre attendu: saut precoce `SpO2/FR/FC`, puis instabilite persistante
+  - traduction simulateur: saut initial immediat, puis poursuite sur quelques minutes au lieu d'un plateau quasi instantane
+
+- `sepsis_progressive`
+  - base documentaire: Surviving Sepsis Campaign 2021, NICE sepsis
+  - lecture retenue: debut souvent progressif, avec `T°C`, `FC`, `FR`, puis vasoplegie; la `DBP` peut baisser avant la `SBP`
+  - ordre attendu: inflammation precoce, puis chute `DBP`, puis baisse de `TAM`
+  - traduction simulateur: progression `J0 -> J1 -> J2 -> J3` compressee, avec phase inflammatoire lente puis bascule vasoplegique
+
+- `hemorrhage_j2`
+  - base documentaire: SFAR choc hemorragique, revue UGIB
+  - lecture retenue: phase compensee avec tachycardie et pression encore relativement preservee, puis decompensation plus brutale
+  - ordre attendu: `FC` et `FR` montent, `SBP` baisse discretement; ensuite chute hemodynamique plus rapide
+  - traduction simulateur: deux variantes
+    - `hemorrhage_low_grade`: saignement a bas bruit et compense
+    - `hemorrhage_j2`: saignement brutal avec decompensation rapide
+
+- `pain_postop_uncontrolled`
+  - base documentaire: SFAR douleur/ketamine, litterature thoracotomie
+  - lecture retenue: reponse sympathique precoce, sans syndrome infectieux ni desaturation specifique
+  - ordre attendu: `FC`, `SBP`, `DBP`, `FR` augmentent vite; `SpO2` reste stable; `T°C` quasi stable
+  - traduction simulateur: cycle compresse de journee avec pics d'activite `matin -> midi -> soir` et accalmie apres prise en charge antalgique
+
+- `cardiac_postop_complication`
+  - base documentaire: recommandations/revues de risque cardiovasculaire peri-operatoire, chirurgie vasculaire
+  - lecture retenue: debut souvent abrupt avec tachycardie et chute tensionnelle, puis bas debit
+  - ordre attendu: baisse `SBP/DBP/TAM` et hausse `FC`, eventuellement `SpO2` un peu plus tard
+  - traduction simulateur: deux variantes
+    - `cardiac_postop_slow`: deterioration progressive du debit
+    - `cardiac_postop_complication`: forme rapide avec instabilite plus precoce
+
 [google-links]: https://developers.google.com/style/cross-references
 [google-footnotes]: https://developers.google.com/style/footnotes
 [ms-links]: https://learn.microsoft.com/en-us/contribute/content/how-to-write-links

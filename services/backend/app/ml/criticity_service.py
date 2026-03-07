@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from pathlib import Path
@@ -23,8 +24,27 @@ FEATURES = [
     "diastolic_bp",
     "respiratory_rate",
     "alert_count",
+    "course_hours",
+    "hr_delta_j0",
+    "spo2_delta_j0",
+    "map_delta_j0",
+    "rr_delta_j0",
+    "temp_delta_j0",
+    "min_spo2_course",
+    "min_map_course",
+    "max_temp_course",
 ]
 TARGET = "has_critical"
+DATA_COLUMNS = [
+    "timestamp",
+    "patient_id",
+    "room",
+    "scenario",
+    "profile",
+    "pathology",
+    *FEATURES,
+    TARGET,
+]
 
 
 def log(msg: str) -> None:
@@ -41,12 +61,25 @@ class CriticityMLService:
 
     def ensure_data_files(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        if not self.vitals_csv.exists():
-            header = (
-                "timestamp,patient_id,room,scenario,profile,pathology,heart_rate,spo2,temperature,"
-                "systolic_bp,diastolic_bp,respiratory_rate,alert_count,has_critical\n"
-            )
-            self.vitals_csv.write_text(header, encoding="utf-8")
+        self._ensure_csv_schema(self.vitals_csv)
+        if self.feedback_csv.exists():
+            self._ensure_csv_schema(self.feedback_csv)
+
+    def _ensure_csv_schema(self, csv_path: Path) -> None:
+        if not csv_path.exists():
+            csv_path.write_text(",".join(DATA_COLUMNS) + "\n", encoding="utf-8")
+            return
+        with csv_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            existing_columns = next(reader, [])
+        if existing_columns == DATA_COLUMNS:
+            return
+        frame = pd.read_csv(csv_path)
+        for column in DATA_COLUMNS:
+            if column not in frame.columns:
+                frame[column] = 0 if column in FEATURES or column == TARGET else ""
+        frame = frame[DATA_COLUMNS]
+        frame.to_csv(csv_path, index=False)
 
     def _normalize_sample(self, sample: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -63,6 +96,15 @@ class CriticityMLService:
             "diastolic_bp": float(sample.get("diastolic_bp", sample.get("dbp", 0.0))),
             "respiratory_rate": float(sample.get("respiratory_rate", sample.get("rr", 0.0))),
             "alert_count": int(sample.get("alert_count", 0)),
+            "course_hours": float(sample.get("course_hours", 0.0)),
+            "hr_delta_j0": float(sample.get("hr_delta_j0", 0.0)),
+            "spo2_delta_j0": float(sample.get("spo2_delta_j0", 0.0)),
+            "map_delta_j0": float(sample.get("map_delta_j0", 0.0)),
+            "rr_delta_j0": float(sample.get("rr_delta_j0", 0.0)),
+            "temp_delta_j0": float(sample.get("temp_delta_j0", 0.0)),
+            "min_spo2_course": float(sample.get("min_spo2_course", 0.0)),
+            "min_map_course": float(sample.get("min_map_course", 0.0)),
+            "max_temp_course": float(sample.get("max_temp_course", 0.0)),
             "has_critical": int(sample.get("has_critical", 0)),
         }
 
@@ -81,6 +123,9 @@ class CriticityMLService:
         if self.feedback_csv.exists():
             df_feedback = pd.read_csv(self.feedback_csv)
             df = pd.concat([df, df_feedback], ignore_index=True)
+        for col in FEATURES + [TARGET]:
+            if col not in df.columns:
+                df[col] = 0
         for col in FEATURES + [TARGET]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         before = len(df)
@@ -130,7 +175,13 @@ class CriticityMLService:
                 log(f"[model] Impossible d'entrainer: {exc}")
                 return None
         try:
-            return joblib.load(self.model_path)
+            pipeline = joblib.load(self.model_path)
+            trained_features = getattr(pipeline, "feature_names_in_", None)
+            if trained_features is not None and list(trained_features) != FEATURES:
+                log("[model] Schema ML change detecte, reentrainement automatique...")
+                self.train()
+                pipeline = joblib.load(self.model_path)
+            return pipeline
         except Exception as exc:  # noqa: BLE001
             log(f"[model] Chargement impossible: {exc}")
             return None

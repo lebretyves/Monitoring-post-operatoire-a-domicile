@@ -41,12 +41,15 @@ class ScenarioDefinition:
     label: str
     timeline: list[Phase]
     calculation_mode: str = "default"
+    repeat_timeline: bool = False
     noise_multiplier: float = 1.0
     stabilize_to_baseline: bool = False
     stabilize_factor: float = 0.0
     baseline_override: dict[str, float] | None = None
     noise_override: dict[str, float] | None = None
     clamp_override: dict[str, list[float]] | None = None
+    initial_shift_by_postop_day: dict[str, dict[str, float]] | None = None
+    onset_delay_range_minutes: list[float] | None = None
 
 
 @dataclass
@@ -67,6 +70,7 @@ class VitalPayload:
     battery: int
     postop_day: int
     surgery_type: str
+    is_historical: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -86,4 +90,5 @@ class VitalPayload:
             "battery": self.battery,
             "postop_day": self.postop_day,
             "surgery_type": self.surgery_type,
+            "is_historical": self.is_historical,
         }

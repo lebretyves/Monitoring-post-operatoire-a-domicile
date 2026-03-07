@@ -80,7 +80,7 @@ async def scenario_review(patient_id: str, request: Request):
         surgery_type=surgery_type,
         limit=5,
     )
-    recent_points = services.influx.query_history(patient_id=patient_id, metric="all", hours=24)
+    recent_points = services.influx.query_history(patient_id=patient_id, metric="all", hours=0)
     prompt = build_scenario_review_prompt(patient, last_vitals, alerts, recent_points)
     structured = await services.llm_client.generate_structured(
         prompt,

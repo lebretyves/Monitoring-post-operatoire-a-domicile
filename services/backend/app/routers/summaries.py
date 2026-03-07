@@ -25,7 +25,8 @@ async def patient_summary(patient_id: str, request: Request):
         surgery_type=surgery_type,
         limit=5,
     )
-    prompt = build_summary_prompt(patient, last_vitals, alerts)
+    history_points = services.influx.query_history(patient_id=patient_id, metric="all", hours=0)
+    prompt = build_summary_prompt(patient, last_vitals, alerts, history_points)
     summary = await services.llm_client.summarize(prompt, system=SUMMARY_SYSTEM_PROMPT)
     source = "ollama"
     if not summary:

@@ -20,3 +20,4 @@ class VitalPayload(BaseModel):
     battery: int = Field(default=100)
     postop_day: int = Field(default=0)
     surgery_type: str = Field(default="")
+    is_historical: bool = Field(default=False)

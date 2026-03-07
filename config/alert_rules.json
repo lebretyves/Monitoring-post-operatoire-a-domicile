@@ -97,6 +97,20 @@
         "PA encore normale au debut"
       ]
     },
+    "hemorrhage_low_grade": {
+      "false_positive_risk": "medium",
+      "false_negative_risk": "high",
+      "remeasure_minutes": { "INFO": 10, "WARNING": 5, "CRITICAL": 0 },
+      "false_positive_examples": [
+        "douleur post-op",
+        "stress sympathique",
+        "dehydration moderee"
+      ],
+      "false_negative_examples": [
+        "saignement compense discret",
+        "pression encore conservee"
+      ]
+    },
     "pain_postop_uncontrolled": {
       "false_positive_risk": "high",
       "false_negative_risk": "low",
@@ -121,6 +135,20 @@
       ],
       "false_negative_examples": [
         "atteinte cardiaque peu visible sur constantes simples",
+        "absence d'ECG et de biomarqueurs"
+      ]
+    },
+    "cardiac_postop_slow": {
+      "false_positive_risk": "high",
+      "false_negative_risk": "high",
+      "remeasure_minutes": { "INFO": 10, "WARNING": 5, "CRITICAL": 0 },
+      "false_positive_examples": [
+        "hypovolemie",
+        "douleur post-op",
+        "fatigue respiratoire"
+      ],
+      "false_negative_examples": [
+        "degradation cardiaque progressive peu bruyante",
         "absence d'ECG et de biomarqueurs"
       ]
     }

@@ -1,6 +1,7 @@
 {
   "version": "1.0",
   "tick_seconds": 5,
+  "history_seed_interval_minutes": 15,
   "mqtt": {
     "topic_template": "patients/{patient_id}/vitals",
     "qos": 1
@@ -47,41 +48,82 @@
     "pneumonia_ira": {
       "label": "Pneumopathie ou IRA post-op progressive",
       "copied_from_source_json": true,
+      "initial_shift_by_postop_day": {
+        "0": { "spo2": 0, "rr": 0, "hr": 0, "temp": 0.0, "sbp": 0, "dbp": 0 },
+        "1": { "spo2": -1, "rr": 1, "hr": 1, "temp": 0.1, "sbp": 0, "dbp": 0 },
+        "2": { "spo2": -2, "rr": 3, "hr": 3, "temp": 0.2, "sbp": -1, "dbp": 0 },
+        "3": { "spo2": -4, "rr": 6, "hr": 6, "temp": 0.5, "sbp": -2, "dbp": -1 }
+      },
       "timeline": [
         {
-          "phase": "early_ira",
-          "duration_minutes": 25,
-          "trend_per_10min": { "temp": 0.05 },
-          "target_shift": { "spo2": -3, "rr": 6, "hr": 10, "sbp": -2, "dbp": -1, "temp": 0.2 },
-          "adaptation_rate": 0.18
+          "phase": "j0_hypoventilation_legere",
+          "duration_minutes": 720,
+          "trend_per_10min": { "temp": 0.00 },
+          "target_shift": { "spo2": -1, "rr": 1, "hr": 1, "sbp": 0, "dbp": 0, "temp": 0.0 },
+          "adaptation_rate": 0.00008
         },
         {
-          "phase": "worsening",
-          "duration_minutes": 15,
-          "trend_per_10min": { "temp": 0.08 },
-          "target_shift": { "spo2": -7, "rr": 12, "hr": 16, "sbp": -4, "dbp": -2, "temp": 0.5 },
-          "adaptation_rate": 0.22
+          "phase": "j1_atelectasie",
+          "duration_minutes": 960,
+          "trend_per_10min": { "temp": 0.01 },
+          "target_shift": { "spo2": -2, "rr": 2, "hr": 2, "sbp": -1, "dbp": 0, "temp": 0.1 },
+          "adaptation_rate": 0.00012
+        },
+        {
+          "phase": "j2_progression_infectieuse",
+          "duration_minutes": 960,
+          "trend_per_10min": { "temp": 0.03 },
+          "target_shift": { "spo2": -4, "rr": 5, "hr": 5, "sbp": -2, "dbp": 0, "temp": 0.4 },
+          "adaptation_rate": 0.00018
+        },
+        {
+          "phase": "j3_ira_declaree",
+          "duration_minutes": 1200,
+          "trend_per_10min": { "temp": 0.05 },
+          "target_shift": { "spo2": -7, "rr": 9, "hr": 9, "sbp": -3, "dbp": -1, "temp": 0.8 },
+          "adaptation_rate": 0.00024
+        }
+      ]
+    },
+    "hemorrhage_low_grade": {
+      "label": "Hemorragie a bas bruit post-op",
+      "added_demo_scenario": true,
+      "timeline": [
+        {
+          "phase": "slow_compensation",
+          "duration_minutes": 1080,
+          "trend_per_10min": { "temp": -0.01 },
+          "target_shift": { "hr": 8, "sbp": -2, "dbp": 0, "rr": 2, "temp": -0.05, "spo2": 0 },
+          "adaptation_rate": 0.00012
+        },
+        {
+          "phase": "persistent_low_noise_bleeding",
+          "duration_minutes": 1440,
+          "trend_per_10min": {},
+          "target_shift": { "hr": 14, "sbp": -6, "dbp": -2, "rr": 3, "temp": -0.1, "spo2": -0.5 },
+          "adaptation_rate": 0.0002
         }
       ]
     },
     "hemorrhage_j2": {
-      "label": "Hemorragie J+2 realiste apres colectomie",
+      "label": "Hemorragie brutale J+2 apres colectomie",
       "copied_from_source_json": true,
+      "onset_delay_range_minutes": [720, 2880],
       "timeline": [
         {
           "phase": "compensated_bleed",
-          "duration_minutes": 30,
-          "trend_per_10min": { "temp": -0.03 },
-          "target_shift": { "hr": 18, "sbp": -5, "dbp": -1, "rr": 4, "temp": -0.1 },
-          "adaptation_rate": 0.16
+          "duration_minutes": 180,
+          "trend_per_10min": { "temp": -0.01 },
+          "target_shift": { "hr": 12, "sbp": -3, "dbp": 0, "rr": 3, "temp": -0.05 },
+          "adaptation_rate": 0.0015
         },
         {
           "phase": "decompensation",
-          "duration_minutes": 10,
-          "instant_jump": { "sbp": -10, "dbp": -5, "hr": 8, "rr": 2 },
+          "duration_minutes": 120,
+          "instant_jump": { "sbp": -8, "dbp": -4, "hr": 6, "rr": 1 },
           "trend_per_10min": {},
-          "target_shift": { "hr": 30, "sbp": -25, "dbp": -14, "rr": 8, "temp": -0.2, "spo2": -1 },
-          "adaptation_rate": 0.3
+          "target_shift": { "hr": 28, "sbp": -24, "dbp": -12, "rr": 6, "temp": -0.1, "spo2": -1 },
+          "adaptation_rate": 0.006
         }
       ],
       "rebleed_pattern": {
@@ -92,82 +134,140 @@
     "pulmonary_embolism": {
       "label": "Embolie pulmonaire brutale",
       "copied_from_source_json": true,
+      "onset_delay_range_minutes": [360, 4320],
       "timeline": [
         {
           "phase": "sudden_event",
-          "duration_minutes": 5,
-          "instant_jump": { "spo2": -6, "rr": 10, "hr": 18, "sbp": -8, "dbp": -6 },
-          "target_shift": { "spo2": -8, "rr": 12, "hr": 22, "sbp": -10, "dbp": -6 },
-          "adaptation_rate": 0.28
+          "duration_minutes": 45,
+          "instant_jump": { "spo2": -4, "rr": 8, "hr": 14, "sbp": -6, "dbp": -4 },
+          "target_shift": { "spo2": -8, "rr": 12, "hr": 20, "sbp": -10, "dbp": -6 },
+          "adaptation_rate": 0.02
         },
         {
           "phase": "persisting_instability",
-          "duration_minutes": 20,
+          "duration_minutes": 240,
           "trend_per_10min": {},
           "target_shift": { "spo2": -10, "rr": 14, "hr": 24, "sbp": -14, "dbp": -10 },
-          "adaptation_rate": 0.18
+          "adaptation_rate": 0.004
         }
       ]
     },
     "sepsis_progressive": {
       "label": "Sepsis progressive puis bascule hemodynamique",
       "copied_from_source_json": true,
+      "initial_shift_by_postop_day": {
+        "0": { "temp": 0.0, "hr": 0, "rr": 0, "sbp": 0, "dbp": 0, "spo2": 0.0 },
+        "1": { "temp": 0.1, "hr": 2, "rr": 1, "sbp": 0, "dbp": -1, "spo2": 0.0 },
+        "2": { "temp": 0.4, "hr": 5, "rr": 3, "sbp": -1, "dbp": -4, "spo2": 0.0 },
+        "3": { "temp": 0.8, "hr": 9, "rr": 5, "sbp": -3, "dbp": -8, "spo2": -0.5 }
+      },
       "timeline": [
         {
-          "phase": "early_inflammation",
-          "duration_minutes": 40,
-          "trend_per_10min": { "temp": 0.06 },
-          "target_shift": { "temp": 0.7, "hr": 10, "rr": 6, "sbp": -2, "dbp": -8, "spo2": -1 },
-          "adaptation_rate": 0.14
+          "phase": "j0_reaction_systemique_discrete",
+          "duration_minutes": 720,
+          "trend_per_10min": { "temp": 0.01 },
+          "target_shift": { "temp": 0.1, "hr": 2, "rr": 1, "sbp": 0, "dbp": -1, "spo2": 0.0 },
+          "adaptation_rate": 0.00008
         },
         {
-          "phase": "vasoplegia_bascule",
-          "duration_minutes": 20,
+          "phase": "j1_inflammation",
+          "duration_minutes": 960,
+          "trend_per_10min": { "temp": 0.02 },
+          "target_shift": { "temp": 0.4, "hr": 4, "rr": 2, "sbp": -1, "dbp": -2, "spo2": 0.0 },
+          "adaptation_rate": 0.00012
+        },
+        {
+          "phase": "j2_sepsis_suspect",
+          "duration_minutes": 960,
           "trend_per_10min": { "temp": 0.04 },
-          "target_shift": { "temp": 1.0, "hr": 22, "rr": 8, "sbp": -12, "dbp": -16, "spo2": -2 },
-          "adaptation_rate": 0.22
+          "target_shift": { "temp": 0.8, "hr": 9, "rr": 4, "sbp": -2, "dbp": -6, "spo2": -0.5 },
+          "adaptation_rate": 0.00018
+        },
+        {
+          "phase": "j3_vasoplegie_bascule",
+          "duration_minutes": 1200,
+          "trend_per_10min": { "temp": 0.04 },
+          "target_shift": { "temp": 1.1, "hr": 16, "rr": 6, "sbp": -8, "dbp": -12, "spo2": -1.5 },
+          "adaptation_rate": 0.00024
         }
       ]
     },
     "pain_postop_uncontrolled": {
       "label": "Douleur post-op non controlee",
       "added_demo_scenario": true,
+      "repeat_timeline": true,
       "timeline": [
         {
-          "phase": "pain_escalation",
-          "duration_minutes": 20,
-          "instant_jump": { "hr": 8, "sbp": 8, "dbp": 5, "rr": 2 },
+          "phase": "matin_mobilisation",
+          "duration_minutes": 360,
+          "instant_jump": { "hr": 5, "sbp": 6, "dbp": 4, "rr": 1 },
           "trend_per_10min": {},
-          "target_shift": { "hr": 18, "sbp": 16, "dbp": 10, "rr": 4, "temp": 0.1, "spo2": 0.0 },
-          "adaptation_rate": 0.2
+          "target_shift": { "hr": 10, "sbp": 10, "dbp": 6, "rr": 3, "temp": 0.0, "spo2": 0.0 },
+          "adaptation_rate": 0.001
         },
         {
-          "phase": "persistent_nociception",
-          "duration_minutes": 20,
+          "phase": "apres_traitement_soulagement",
+          "duration_minutes": 240,
+          "trend_per_10min": {},
+          "target_shift": { "hr": 5, "sbp": 4, "dbp": 2, "rr": 1, "temp": 0.0, "spo2": 0.0 },
+          "adaptation_rate": 0.0012
+        },
+        {
+          "phase": "midi_reprise_activite",
+          "duration_minutes": 360,
+          "instant_jump": { "hr": 3, "sbp": 3, "dbp": 2, "rr": 1 },
+          "trend_per_10min": {},
+          "target_shift": { "hr": 11, "sbp": 9, "dbp": 6, "rr": 3, "temp": 0.0, "spo2": 0.0 },
+          "adaptation_rate": 0.001
+        },
+        {
+          "phase": "soir_recrudescence",
+          "duration_minutes": 480,
           "trend_per_10min": {},
           "target_shift": { "hr": 12, "sbp": 10, "dbp": 6, "rr": 3, "temp": 0.0, "spo2": 0.0 },
-          "adaptation_rate": 0.14
+          "adaptation_rate": 0.0008
+        }
+      ]
+    },
+    "cardiac_postop_slow": {
+      "label": "Complication cardiaque post-op lente",
+      "added_demo_scenario": true,
+      "timeline": [
+        {
+          "phase": "progressive_low_output",
+          "duration_minutes": 960,
+          "trend_per_10min": {},
+          "target_shift": { "hr": 10, "sbp": -8, "dbp": -5, "spo2": -1, "rr": 2, "temp": 0.0 },
+          "adaptation_rate": 0.00045
+        },
+        {
+          "phase": "worsening_cardiac_stress",
+          "duration_minutes": 1200,
+          "trend_per_10min": {},
+          "target_shift": { "hr": 18, "sbp": -16, "dbp": -10, "spo2": -2, "rr": 3, "temp": 0.0 },
+          "adaptation_rate": 0.00075
         }
       ]
     },
     "cardiac_postop_complication": {
-      "label": "Complication cardiaque post-op",
+      "label": "Complication cardiaque post-op rapide",
       "added_demo_scenario": true,
+      "onset_delay_range_minutes": [240, 2880],
       "timeline": [
         {
           "phase": "hemodynamic_instability_onset",
-          "duration_minutes": 10,
-          "instant_jump": { "hr": 20, "sbp": -16, "dbp": -10, "spo2": -2, "rr": 3 },
+          "duration_minutes": 60,
+          "instant_jump": { "hr": 14, "sbp": -12, "dbp": -8, "spo2": -1, "rr": 2 },
           "trend_per_10min": {},
-          "target_shift": { "hr": 28, "sbp": -24, "dbp": -14, "spo2": -3, "rr": 4, "temp": 0.0 },
-          "adaptation_rate": 0.3
+          "target_shift": { "hr": 24, "sbp": -20, "dbp": -12, "spo2": -3, "rr": 4, "temp": 0.0 },
+          "adaptation_rate": 0.01
         },
         {
           "phase": "low_output_state",
-          "duration_minutes": 20,
+          "duration_minutes": 360,
           "trend_per_10min": {},
-          "target_shift": { "hr": 36, "sbp": -34, "dbp": -20, "spo2": -5, "rr": 6, "temp": 0.0 },
-          "adaptation_rate": 0.22
+          "target_shift": { "hr": 32, "sbp": -30, "dbp": -18, "spo2": -5, "rr": 6, "temp": 0.0 },
+          "adaptation_rate": 0.0035
         }
       ]
     }

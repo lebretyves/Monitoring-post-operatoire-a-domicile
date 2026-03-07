@@ -11,6 +11,8 @@ from fastapi import APIRouter, HTTPException, Request
 router = APIRouter(prefix="/api/patients", tags=["patients"])
 
 SURGERY_BAND_ORDER = ("strong", "medium", "weak")
+POSTOP_DAY_ORDER = ("0", "1", "2", "3")
+MINUTES_PER_DAY = 24 * 60
 
 
 def _scenario_labels(simulation_config_path: Path) -> dict[str, str]:
@@ -54,6 +56,29 @@ def _resolve_case_for_refresh(
             resolved_case["surgery_type"] = random.choice(surgery_pool[selected_band])
             resolved_case["surgery_probability_band"] = selected_band
             resolved_case["surgery_probability_weights"] = dict(surgery_weighting)
+    postop_day_weights = case_entry.get("postop_day_weights")
+    if isinstance(postop_day_weights, dict):
+        day_candidates: list[str] = []
+        day_weights: list[float] = []
+        for day in POSTOP_DAY_ORDER:
+            raw_weight = postop_day_weights.get(day, postop_day_weights.get(int(day), 0))
+            weight = float(raw_weight)
+            if weight > 0:
+                day_candidates.append(day)
+                day_weights.append(weight)
+        if day_candidates:
+            selected_day = random.choices(day_candidates, weights=day_weights, k=1)[0]
+            selected_day_int = int(selected_day)
+            resolved_case["postop_day"] = selected_day_int
+            day_start_minutes = selected_day_int * MINUTES_PER_DAY
+            day_end_minutes = day_start_minutes + MINUTES_PER_DAY
+            resolved_case["simulated_elapsed_minutes"] = random.randint(day_start_minutes, day_end_minutes - 1)
+            resolved_case["postop_day_probability_weights"] = {
+                str(day): float(postop_day_weights.get(day, postop_day_weights.get(int(day), 0)))
+                for day in POSTOP_DAY_ORDER
+                if float(postop_day_weights.get(day, postop_day_weights.get(int(day), 0))) > 0
+            }
+            resolved_case["observed_at_label"] = f"J{selected_day_int}"
     label_template = resolved_case.get("case_label_template")
     if label_template:
         resolved_case["case_label"] = label_template.format(
@@ -178,6 +203,9 @@ def refresh_patients(request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    for patient_id in patient_ids:
+        services.influx.clear_patient_history(patient_id)
+        services.last_vitals.pop(patient_id, None)
     if not services.settings.test_mode:
         services.consumer.publish_refresh_request(assignments)
 

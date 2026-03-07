@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from influxdb_client import InfluxDBClient, Point, WritePrecision
@@ -44,9 +44,13 @@ class InfluxStorage:
         metric_filter = ""
         if metric != "all":
             metric_filter = f'|> filter(fn: (r) => r["_field"] == "{metric}")'
+        if hours <= 0:
+            range_expression = "|> range(start: -3650d)"
+        else:
+            range_expression = f"|> range(start: -{hours}h)"
         query = f"""
         from(bucket: "{self.bucket}")
-          |> range(start: -{hours}h)
+          {range_expression}
           |> filter(fn: (r) => r["_measurement"] == "vitals")
           |> filter(fn: (r) => r["patient_id"] == "{patient_id}")
           {metric_filter}
@@ -64,6 +68,16 @@ class InfluxStorage:
                     value = int(round(float(value)))
                 aggregated[key]["values"][field_name] = value
         return [aggregated[key] for key in sorted(aggregated)]
+
+    def clear_patient_history(self, patient_id: str) -> None:
+        stop = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat().replace("+00:00", "Z")
+        self.client.delete_api().delete(
+            start="1970-01-01T00:00:00Z",
+            stop=stop,
+            predicate=f'_measurement="vitals" AND patient_id="{patient_id}"',
+            bucket=self.bucket,
+            org=self.org,
+        )
 
 
 class MemoryInfluxStorage:
@@ -92,6 +106,10 @@ class MemoryInfluxStorage:
 
     def query_history(self, patient_id: str, metric: str = "all", hours: int = 24) -> list[dict[str, Any]]:
         rows = self.rows.get(patient_id, [])
+        if hours > 0 and rows:
+            latest_ts = _parse_ts(rows[-1]["ts"])
+            threshold = latest_ts - timedelta(hours=hours)
+            rows = [row for row in rows if _parse_ts(row["ts"]) >= threshold]
         if metric == "all":
             return [
                 {
@@ -101,13 +119,16 @@ class MemoryInfluxStorage:
                         for key, value in row["values"].items()
                     },
                 }
-                for row in rows[-512:]
+                for row in rows
             ]
         filtered = []
-        for row in rows[-512:]:
+        for row in rows:
             if metric in row["values"]:
                 value = row["values"][metric]
                 if metric == "map":
                     value = int(round(float(value)))
                 filtered.append({"ts": row["ts"], "values": {metric: value}})
         return filtered
+
+    def clear_patient_history(self, patient_id: str) -> None:
+        self.rows[patient_id] = []

@@ -18,6 +18,7 @@
       "risk_level": "surveillance_postop",
       "surgery_type": "cholecystectomie laparoscopique",
       "postop_day": 1,
+      "postop_day_weights": { "0": 25, "1": 35, "2": 25, "3": 15 },
       "scenario": "recovery_copy_patient1",
       "history": ["HTA legere", "post-op simple"],
       "notes": "Cas de reference stable pour ouvrir la demo sans alerte pathologique.",
@@ -35,9 +36,10 @@
       "risk_level": "surveillance_postop",
       "surgery_type": "chirurgie thoracique",
       "postop_day": 2,
+      "postop_day_weights": { "0": 10, "1": 20, "2": 35, "3": 35 },
       "scenario": "pneumonia_ira",
       "history": ["BPCO moderee", "ancien fumeur"],
-      "notes": "Complication respiratoire progressive apres chirurgie majeure.",
+      "notes": "Complication respiratoire progressive reconstruite depuis J0 jusqu'au temps clinique courant.",
       "baseline": { "hr": 78, "spo2": 97, "sbp": 126, "dbp": 76, "rr": 16, "temp": 36.9 },
       "surgery_pool": {
         "strong": ["chirurgie thoracique", "oesophagectomie", "chirurgie abdominale haute ouverte"],
@@ -47,8 +49,8 @@
     },
     {
       "case_id": "case_hemorrhage_colectomy",
-      "case_label": "Hemorragie post-op",
-      "case_label_template": "Hemorragie post-op apres {surgery_type}",
+      "case_label": "Hemorragie brutale post-op",
+      "case_label_template": "Hemorragie brutale post-op apres {surgery_type}",
       "source": "json_source",
       "full_name": "Claire Dubreuil",
       "age": 58,
@@ -57,14 +59,38 @@
       "risk_level": "surveillance_postop",
       "surgery_type": "colectomie",
       "postop_day": 2,
+      "postop_day_weights": { "0": 20, "1": 25, "2": 35, "3": 20 },
       "scenario": "hemorrhage_j2",
       "history": ["anemie chronique", "anticoagulation prophylactique"],
-      "notes": "Cas cle pour la demo des alertes hemodynamiques.",
+      "notes": "Cas cle pour la demo des alertes hemodynamiques brutales.",
       "baseline": { "hr": 76, "spo2": 98, "sbp": 124, "dbp": 77, "rr": 15, "temp": 36.8 },
       "surgery_pool": {
         "strong": ["colectomie", "hepatectomie", "pancreatectomie", "chirurgie vasculaire majeure"],
         "medium": ["chirurgie thoracique", "bypass bariatrique"],
         "weak": ["chirurgie pelvienne majeure"]
+      }
+    },
+    {
+      "case_id": "case_hemorrhage_low_grade",
+      "case_label": "Hemorragie a bas bruit post-op",
+      "case_label_template": "Hemorragie a bas bruit apres {surgery_type}",
+      "source": "added_demo_scenario",
+      "full_name": "Lucie Bernard",
+      "age": 55,
+      "room": "A108",
+      "profile": "baseline_normale",
+      "risk_level": "surveillance_postop",
+      "surgery_type": "colectomie",
+      "postop_day": 2,
+      "postop_day_weights": { "0": 10, "1": 25, "2": 40, "3": 25 },
+      "scenario": "hemorrhage_low_grade",
+      "history": ["anemie ferriprive", "chirurgie digestive recente"],
+      "notes": "Saignement compensé et progressif, plus discret qu'une hemorragie brutale.",
+      "baseline": { "hr": 75, "spo2": 98, "sbp": 123, "dbp": 77, "rr": 15, "temp": 36.8 },
+      "surgery_pool": {
+        "strong": ["colectomie", "hepatectomie", "pancreatectomie"],
+        "medium": ["bypass bariatrique", "chirurgie pelvienne majeure"],
+        "weak": ["chirurgie thoracique"]
       }
     },
     {
@@ -79,6 +105,7 @@
       "risk_level": "surveillance_postop",
       "surgery_type": "arthroplastie du genou",
       "postop_day": 3,
+      "postop_day_weights": { "0": 10, "1": 25, "2": 30, "3": 35 },
       "scenario": "pulmonary_embolism",
       "history": ["obesite", "TVP ancienne"],
       "notes": "Cas a presentation brutale avec desaturation et tachycardie.",
@@ -101,9 +128,10 @@
       "risk_level": "surveillance_postop",
       "surgery_type": "chirurgie colorectale",
       "postop_day": 3,
+      "postop_day_weights": { "0": 5, "1": 15, "2": 35, "3": 45 },
       "scenario": "sepsis_progressive",
       "history": ["diabete type 2", "IMC 31", "infection urinaire recente"],
-      "notes": "Fievre, tachycardie puis baisse hemodynamique.",
+      "notes": "Sepsis progressif reconstruit depuis J0 jusqu'au temps clinique courant.",
       "baseline": { "hr": 79, "spo2": 97, "sbp": 123, "dbp": 75, "rr": 16, "temp": 36.9 },
       "surgery_pool": {
         "strong": ["chirurgie colorectale", "resection anterieure basse", "colectomie"],
@@ -123,6 +151,7 @@
       "risk_level": "surveillance_postop",
       "surgery_type": "chirurgie thoracique",
       "postop_day": 1,
+      "postop_day_weights": { "0": 40, "1": 35, "2": 15, "3": 10 },
       "scenario": "pain_postop_uncontrolled",
       "history": ["anxiete", "consommation chronique d'antalgiques"],
       "notes": "Tachycardie, hausse tensionnelle et polypnee legere sans signe infectieux.",
@@ -135,8 +164,8 @@
     },
     {
       "case_id": "case_cardiac_postop",
-      "case_label": "Complication cardiaque post-op",
-      "case_label_template": "Complication cardiaque post-op apres {surgery_type}",
+      "case_label": "Complication cardiaque post-op rapide",
+      "case_label_template": "Complication cardiaque post-op rapide apres {surgery_type}",
       "source": "added_demo_scenario",
       "full_name": "Marc Delcourt",
       "age": 76,
@@ -145,13 +174,37 @@
       "risk_level": "surveillance_postop",
       "surgery_type": "chirurgie vasculaire majeure",
       "postop_day": 1,
+      "postop_day_weights": { "0": 25, "1": 35, "2": 25, "3": 15 },
       "scenario": "cardiac_postop_complication",
       "history": ["coronaropathie", "HTA", "fibrillation atriale paroxystique"],
-      "notes": "Instabilite hemodynamique evocatrice d'une complication cardiaque post-operatoire.",
+      "notes": "Instabilite hemodynamique evocatrice d'une complication cardiaque rapide.",
       "baseline": { "hr": 77, "spo2": 97, "sbp": 126, "dbp": 78, "rr": 16, "temp": 36.8 },
       "surgery_pool": {
         "strong": ["chirurgie vasculaire majeure", "chirurgie vasculaire ouverte", "chirurgie thoracique majeure"],
         "medium": ["chirurgie colorectale ouverte", "gastrectomie", "chirurgie abdominale oncologique majeure"],
+        "weak": ["arthroplastie de hanche"]
+      }
+    },
+    {
+      "case_id": "case_cardiac_postop_slow",
+      "case_label": "Complication cardiaque post-op lente",
+      "case_label_template": "Complication cardiaque post-op lente apres {surgery_type}",
+      "source": "added_demo_scenario",
+      "full_name": "Helene Caron",
+      "age": 72,
+      "room": "A109",
+      "profile": "baseline_normale",
+      "risk_level": "surveillance_postop",
+      "surgery_type": "chirurgie vasculaire majeure",
+      "postop_day": 2,
+      "postop_day_weights": { "0": 10, "1": 25, "2": 40, "3": 25 },
+      "scenario": "cardiac_postop_slow",
+      "history": ["coronaropathie stable", "insuffisance cardiaque legere"],
+      "notes": "Degradation cardiaque progressive avec baisse lente du debit.",
+      "baseline": { "hr": 76, "spo2": 97, "sbp": 125, "dbp": 77, "rr": 16, "temp": 36.8 },
+      "surgery_pool": {
+        "strong": ["chirurgie vasculaire majeure", "chirurgie thoracique majeure", "chirurgie abdominale oncologique majeure"],
+        "medium": ["chirurgie colorectale ouverte", "gastrectomie"],
         "weak": ["arthroplastie de hanche"]
       }
     }

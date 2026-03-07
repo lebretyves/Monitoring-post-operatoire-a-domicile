@@ -65,19 +65,19 @@ Ports par defaut:
 ## Demo conseillee
 
 1. Ouvrir le dashboard Patients.
-2. Montrer `PAT-001` stable en recuperation.
-3. Ouvrir `PAT-002` et observer la degradation respiratoire.
-4. Montrer `PAT-003` hemorragie J+2 avec chute SBP/MAP et tachycardie.
-5. Montrer `PAT-004` embolie pulmonaire avec desaturation rapide.
-6. Montrer `PAT-005` sepsis progressive avec fievre, tachycardie et baisse MAP.
+2. Montrer `PAT-001` comme patient temoin sain.
+3. Lancer un `Refresh demo` pour tirer de nouveaux cas cliniques coherents.
+4. Ouvrir un patient pathologique et montrer sa chirurgie, son jour post-op observe et sa complication plausible.
+5. Afficher le graphe `Depuis J0` pour montrer la trajectoire clinique complete.
+6. Basculer ensuite sur `24h`, `6h` ou `1h` pour zoomer la phase recente.
 7. Afficher les alertes `INFO`, `WARNING`, `CRITICAL`.
-8. Ack une alerte depuis l'UI.
-9. Montrer l'historique 24h/48h et le resume patient.
-10. Sur la fiche patient, montrer le score ML puis classer le cas et re-entrainer le modele.
+8. Marquer une alerte comme vue depuis l'UI.
+9. Montrer le resume patient et la revue de scenario par le LLM.
+10. Sur la fiche patient, montrer le score ML longitudinal puis classer le cas et re-entrainer le modele.
 
 ## Mapping Must Have
 
-- `M1` Simulateur multi-patients: 5 profils en continu (`PAT-001` a `PAT-005`) avec FC, SpO2, PA, MAP, T, FR.
+- `M1` Simulateur multi-patients: 5 patients en continu (`PAT-001` a `PAT-005`) avec FC, SpO2, PA, MAP, T, FR, tous initialises sur une baseline normale a `J0`.
 - `M2` MQTT: Mosquitto + topics `patients/{id}/vitals` + QoS 1.
 - `M3` Stockage temps reel: InfluxDB obligatoire pour `vitals`, PostgreSQL pour relationnel.
 - `M4` Dashboard web: React temps reel via REST + WebSocket.
@@ -89,7 +89,7 @@ Ports par defaut:
 
 - ML anomalies: placeholder actif cote backend (`IsolationForest`) si active.
 - LLM summary: client Ollama optionnel, sinon resume heuristique local.
-- Historique 24h/48h et tendances: endpoints et affichage frontend.
+- Historique `Depuis J0`, `24h`, `6h`, `1h` et tendances: endpoints et affichage frontend.
 - Profils patients: antecedents, chirurgie, jour post-op dans `patients_seed.json`.
 - Export CSV/PDF et notifications: endpoints placeholder dans l'API.
 
@@ -136,6 +136,7 @@ make seed
 
 - [docker-compose.yml](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docker-compose.yml)
 - [docs/architecture.mmd](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\architecture.mmd)
+- [docs/case-generation.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\case-generation.md)
 - [docs/clinical-references.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\clinical-references.md)
 - [config/alert_rules.json](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\config\alert_rules.json)
 - [config/simulation_scenarios.json](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\config\simulation_scenarios.json)
@@ -146,6 +147,11 @@ make seed
 - Les patients 2 a 5 reprennent ou derivent directement des scenarios du JSON source fourni.
 - Le patient 1 reutilise la meme structure de simulation pour rester coherent mais reste stable pour la demo.
 - Le refresh clinique tire des chirurgies compatibles avec chaque complication via une ponderation `forte/moyenne/faible = 70/20/10`.
+- Chaque cas commence sur une baseline normale a `J0`, puis le simulateur reconstruit l'histoire complete jusqu'au temps clinique courant observe entre `J0` et `J3`.
+- Les complications progressives se construisent sur plusieurs heures/jours cliniques simules; les complications brutales gardent un delai d'apparition aleatoire pendant la surveillance.
+- Le graphe patient permet de voir l'histoire `Depuis J0`, puis de zoomer sur `24h`, `6h` ou `1h`.
+- Le score ML et les resumes LLM utilisent maintenant l'histoire `J0 -> maintenant`, pas seulement l'instantane recent.
+- Le calcul detaille des cas, jours post-op et combinaisons possibles est documente dans [case-generation.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\case-generation.md).
 - Les extras ML et LLM sont facultatifs: ils n'empechent pas la demo si absents.
 
 ## LLM local

@@ -27,7 +27,7 @@ export function PatientDetailPage() {
   const [points, setPoints] = useState<TrendPoint[]>([]);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [summary, setSummary] = useState("Chargement...");
-  const [hours, setHours] = useState(24);
+  const [hours, setHours] = useState(0);
   const [wsStatus, setWsStatus] = useState("connecting");
   const [mlPrediction, setMlPrediction] = useState<MlPredictionResponse | null>(null);
   const [mlPathology, setMlPathology] = useState("");
@@ -43,7 +43,7 @@ export function PatientDetailPage() {
   useEffect(() => {
     let mounted = true;
     const loadBaseContext = async () => {
-      const [patients, history] = await Promise.all([getPatients(), getHistory(patientId, hours)]);
+      const [patients, history] = await Promise.all([getPatients(), getHistory(patientId, 0)]);
       if (!mounted) {
         return;
       }
@@ -62,7 +62,7 @@ export function PatientDetailPage() {
     return () => {
       mounted = false;
     };
-  }, [patientId, hours]);
+  }, [patientId]);
 
   useEffect(() => {
     let mounted = true;
@@ -99,7 +99,7 @@ export function PatientDetailPage() {
       if (event.type === "vitals") {
         setPatient((current) => (current ? { ...current, last_vitals: event.payload } : current));
         setPoints((current) => [
-          ...current.slice(-119),
+          ...current.slice(-999),
           {
             ts: event.payload.ts,
             values: {
@@ -206,11 +206,17 @@ export function PatientDetailPage() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button type="button" onClick={() => setHours(0)} style={hourButton(hours === 0)}>
+            Depuis J0
+          </button>
+          <button type="button" onClick={() => setHours(1)} style={hourButton(hours === 1)}>
+            1h
+          </button>
+          <button type="button" onClick={() => setHours(6)} style={hourButton(hours === 6)}>
+            6h
+          </button>
           <button type="button" onClick={() => setHours(24)} style={hourButton(hours === 24)}>
             24h
-          </button>
-          <button type="button" onClick={() => setHours(48)} style={hourButton(hours === 48)}>
-            48h
           </button>
           <a href={exportCsvUrl(patientId)} style={linkButton}>
             Export CSV
@@ -230,7 +236,7 @@ export function PatientDetailPage() {
         <MetricCard label={"T\u00B0C"} value={vitals ? `${vitals.temp} \u00B0C` : "-"} accentColor="#7c3aed" />
       </section>
 
-      <VitalChart points={points} />
+      <VitalChart points={points} rangeHours={hours} />
 
       <section style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(260px, 1fr)", gap: 16 }}>
         <ScenarioControls scenario={currentScenario} />
