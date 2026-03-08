@@ -75,14 +75,24 @@ class MQTTConsumer:
             reading["map"] = reading["dbp"] + ((reading["sbp"] - reading["dbp"]) / 3.0)
         reading["map"] = int(round(float(reading["map"])))
         reading["shock_index"] = round(reading["hr"] / max(1, reading["sbp"]), 2)
-        self.influx.write_vital(reading)
-        if reading.get("is_historical"):
+        is_historical = bool(reading.get("is_historical"))
+        backfill_only = bool(reading.get("backfill_only"))
+        if not backfill_only:
+            self.influx.write_vital(reading)
+        self.state.push(reading)
+        generated_alerts = list(self.alert_engine.evaluate(reading))
+        if is_historical:
+            for alert in generated_alerts:
+                alert["metric_snapshot"] = {
+                    **alert["metric_snapshot"],
+                    "is_historical": True,
+                    "historical_backfill": True,
+                }
+                self.postgres.store_alert(alert)
             return
         history_points = self.influx.query_history(patient_id=patient_id, metric="all", hours=0)
         course_features = derive_course_features(history_points)
-        self.state.push(reading)
         self.last_vitals[patient_id] = reading
-        generated_alerts = list(self.alert_engine.evaluate(reading))
         self.ml_service.record_vital_sample(
             {
                 **reading,

@@ -5,7 +5,11 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.ml.features import derive_course_features
+from app.ml.features import (
+    compute_evolving_risk,
+    compute_immediate_criticality,
+    derive_course_features,
+)
 
 
 router = APIRouter(prefix="/api/ml", tags=["ml"])
@@ -90,16 +94,27 @@ def predict_patient_criticity(patient_id: str, request: Request):
     services = request.app.state.services
     patient, last_vitals, sample, history_points = _build_ml_sample(services, patient_id)
     probability = services.ml_service.predict(sample)
+    thresholds = services.alert_engine.ruleset.get("thresholds", {})
+    immediate_criticality = compute_immediate_criticality(last_vitals, thresholds)
+    evolving_risk = compute_evolving_risk(
+        history_points,
+        thresholds,
+        scenario_key=str(last_vitals.get("scenario", "")),
+        pathology=str(sample["pathology"]),
+    )
     return {
         "patient_id": patient_id,
         "patient_name": patient_id,
         "pathology": sample["pathology"],
         "probability": probability,
+        "ml_probability": probability,
         "model_ready": probability is not None,
         "sample": sample,
         "last_vitals": last_vitals,
         "history_points": len(history_points),
         "course_window": "J0_to_now",
+        "immediate_criticality": immediate_criticality,
+        "evolving_risk": evolving_risk,
         "recent_feedback": services.postgres.list_ml_feedback(
             pathology=sample["pathology"],
             surgery_type=sample["surgery_type"],

@@ -83,11 +83,12 @@ class PostgresStorage:
         return row
 
     def store_alert(self, alert: dict[str, Any]) -> dict[str, Any]:
+        created_at = alert.get("created_at") or alert.get("metric_snapshot", {}).get("ts")
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO alerts (rule_id, patient_id, level, status, title, message, metric_snapshot)
-                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                INSERT INTO alerts (rule_id, patient_id, level, status, title, message, metric_snapshot, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, COALESCE(%s::timestamptz, NOW()))
                 RETURNING id, rule_id, patient_id, level, status, title, message, metric_snapshot, created_at, acknowledged_at, acknowledged_by
                 """,
                 (
@@ -98,6 +99,7 @@ class PostgresStorage:
                     alert["title"],
                     alert["message"],
                     json.dumps(alert["metric_snapshot"]),
+                    created_at,
                 ),
             )
             row = cur.fetchone()
@@ -161,6 +163,17 @@ class PostgresStorage:
         row["created_at"] = row["created_at"].isoformat()
         row["acknowledged_at"] = row["acknowledged_at"].isoformat() if row["acknowledged_at"] else None
         return row
+
+    def clear_patient_alerts(self, patient_id: str) -> None:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM alerts
+                WHERE patient_id = %s
+                """,
+                (patient_id,),
+            )
+            conn.commit()
 
     def store_note(self, patient_id: str, content: str, note_type: str = "summary", source: str = "rule-based") -> None:
         with self._conn() as conn, conn.cursor() as cur:
@@ -333,7 +346,7 @@ class MemoryPostgresStorage:
             "title": alert["title"],
             "message": alert["message"],
             "metric_snapshot": alert["metric_snapshot"],
-            "created_at": _utc_now(),
+            "created_at": alert.get("created_at") or alert.get("metric_snapshot", {}).get("ts") or _utc_now(),
             "acknowledged_at": None,
             "acknowledged_by": None,
         }
@@ -374,6 +387,9 @@ class MemoryPostgresStorage:
                 alert["acknowledged_at"] = _utc_now()
                 return alert
         return None
+
+    def clear_patient_alerts(self, patient_id: str) -> None:
+        self.alerts = [alert for alert in self.alerts if alert["patient_id"] != patient_id]
 
     def store_note(self, patient_id: str, content: str, note_type: str = "summary", source: str = "rule-based") -> None:
         self.notes.append(

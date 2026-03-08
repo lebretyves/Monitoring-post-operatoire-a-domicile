@@ -25,6 +25,7 @@ class AlertState:
         )
         self.latest_snapshots: dict[str, dict[str, Any]] = {}
         self.last_alerts: dict[tuple[str, str], datetime] = {}
+        self.active_rules: dict[tuple[str, str], bool] = {}
 
     def push(self, reading: dict[str, Any]) -> None:
         patient_id = reading["patient_id"]
@@ -64,11 +65,29 @@ class AlertState:
             return None
         return samples[-1][1] - samples[0][1]
 
+    def set_rule_active(self, patient_id: str, rule_id: str, is_active: bool) -> None:
+        key = (patient_id, rule_id)
+        if is_active:
+            self.active_rules[key] = True
+        else:
+            self.active_rules.pop(key, None)
+
     def should_emit(self, patient_id: str, rule_id: str, cooldown_seconds: int) -> bool:
         key = (patient_id, rule_id)
+        if self.active_rules.get(key):
+            return False
         now = parse_ts(self.latest_snapshots[patient_id]["ts"])
         last = self.last_alerts.get(key)
         if last and (now - last).total_seconds() < cooldown_seconds:
             return False
         self.last_alerts[key] = now
+        self.active_rules[key] = True
         return True
+
+    def clear_patient(self, patient_id: str) -> None:
+        self.metric_history.pop(patient_id, None)
+        self.latest_snapshots.pop(patient_id, None)
+        for key in [key for key in self.last_alerts if key[0] == patient_id]:
+            self.last_alerts.pop(key, None)
+        for key in [key for key in self.active_rules if key[0] == patient_id]:
+            self.active_rules.pop(key, None)

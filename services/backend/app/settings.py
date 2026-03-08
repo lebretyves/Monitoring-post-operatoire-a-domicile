@@ -32,6 +32,7 @@ class Settings:
     simulation_config_path: Path
     cases_catalog_path: Path
     patients_seed_path: Path
+    questionnaire_rules_path: Path
     history_default_hours: int
     enable_ml: bool
     ml_runtime_dir: Path
@@ -39,6 +40,7 @@ class Settings:
     ollama_base_url: str
     ollama_model: str
     ollama_timeout_seconds: int
+    kb_root: Path
     test_mode: bool
 
     @property
@@ -93,12 +95,14 @@ def load_settings(test_mode: bool | None = None) -> Settings:
         simulation_config_path=_resolve_path("SIMULATION_CONFIG_PATH", "config/simulation_scenarios.json"),
         cases_catalog_path=_resolve_path("CASES_CATALOG_PATH", "config/cases_catalog.json"),
         patients_seed_path=_resolve_path("PATIENTS_SEED_PATH", "config/patients_seed.json"),
+        questionnaire_rules_path=_resolve_path("QUESTIONNAIRE_RULES_PATH", "config/questionnaire_rules.json"),
         history_default_hours=int(os.getenv("HISTORY_DEFAULT_HOURS", "24")),
         enable_ml=_as_bool(os.getenv("ENABLE_ML"), True),
         ml_runtime_dir=_resolve_path("ML_RUNTIME_DIR", "runtime/ml", must_exist=False),
         enable_llm=False if resolved_test_mode else _as_bool(os.getenv("ENABLE_LLM"), False),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"),
-        ollama_model=os.getenv("OLLAMA_MODEL", "llama3.2"),
-        ollama_timeout_seconds=int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "20")),
+        ollama_model=os.getenv("OLLAMA_MODEL", "meditron-8b-local"),
+        ollama_timeout_seconds=int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "90")),
+        kb_root=_resolve_path("KB_ROOT", "kb", must_exist=False),
         test_mode=resolved_test_mode,
     )

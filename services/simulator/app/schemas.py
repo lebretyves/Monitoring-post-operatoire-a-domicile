@@ -71,6 +71,7 @@ class VitalPayload:
     postop_day: int
     surgery_type: str
     is_historical: bool = False
+    backfill_only: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,4 +92,5 @@ class VitalPayload:
             "postop_day": self.postop_day,
             "surgery_type": self.surgery_type,
             "is_historical": self.is_historical,
+            "backfill_only": self.backfill_only,
         }

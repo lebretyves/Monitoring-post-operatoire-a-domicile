@@ -21,3 +21,4 @@ class VitalPayload(BaseModel):
     postop_day: int = Field(default=0)
     surgery_type: str = Field(default="")
     is_historical: bool = Field(default=False)
+    backfill_only: bool = Field(default=False)

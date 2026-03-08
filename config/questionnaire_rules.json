@@ -1,0 +1,295 @@
+{
+  "modules": [
+    {
+      "id": "respiratory_differential",
+      "title": "Questions respiratoires ciblees",
+      "description": "Aide a departager une complication thromboembolique d'une complication respiratoire infectieuse.",
+      "targets": ["Embolie pulmonaire", "Pneumopathie / IRA"],
+      "trigger_ids": ["respiratory_alert", "desaturation", "tachypnea", "respiratory_trend"],
+      "source_refs": [
+        {
+          "label": "ameli - embolie pulmonaire",
+          "url": "https://www.ameli.fr/assure/sante/urgence/pathologies/embolie-pulmonaire"
+        },
+        {
+          "label": "ameli - essoufflement recent",
+          "url": "https://www.ameli.fr/assure/sante/themes/essoufflement-recent/je-suis-brutalement-essouffle-et-j-ai-du-mal-respirer-que-faire"
+        }
+      ],
+      "questions": [
+        {
+          "id": "dyspnea_onset",
+          "label": "L'essoufflement est-il apparu brutalement ou progressivement ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "absent", "label": "Pas d'essoufflement"},
+            {"value": "brutal", "label": "Brutal"},
+            {"value": "progressif", "label": "Progressif"},
+            {"value": "inconnu", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "chest_pain_type",
+          "label": "Y a-t-il une douleur thoracique, et de quel type ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "absent", "label": "Absente"},
+            {"value": "pleurale", "label": "Pleurale / a l'inspiration"},
+            {"value": "toux", "label": "Surtout a la toux"},
+            {"value": "oppressive", "label": "Oppressive"},
+            {"value": "inconnue", "label": "Inconnue"}
+          ]
+        },
+        {
+          "id": "cough",
+          "label": "Le patient tousse-t-il ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "sputum",
+          "label": "Y a-t-il des crachats / expectorations ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "none", "label": "Aucun"},
+            {"value": "clear", "label": "Clairs"},
+            {"value": "purulent", "label": "Purulents"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "hemoptysis",
+          "label": "Y a-t-il des crachats sanglants ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "calf_pain_swelling",
+          "label": "Douleur ou gonflement d'un mollet ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "infectious_differential",
+      "title": "Questions infectieuses ciblees",
+      "description": "Aide a departager un sepsis, une infection de plaie ou une complication respiratoire infectieuse.",
+      "targets": ["Sepsis", "Pneumopathie / IRA", "Infection de plaie"],
+      "trigger_ids": ["infectious_alert", "fever_abnormal", "inflammatory_cluster"],
+      "source_refs": [
+        {
+          "label": "ameli - soigner une plaie",
+          "url": "https://www.ameli.fr/var/assure/sante/bons-gestes/soins/soigner-plaie"
+        },
+        {
+          "label": "NICE sepsis",
+          "url": "https://www.nice.org.uk/guidance/ng51/resources/suspected-sepsis-recognition-diagnosis-and-early-management-pdf-1837508256709"
+        }
+      ],
+      "questions": [
+        {
+          "id": "chills",
+          "label": "Le patient a-t-il eu de la fievre ressentie ou des frissons ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "wound_redness",
+          "label": "La plaie est-elle rouge ou plus inflammatoire ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "wound_discharge",
+          "label": "Y a-t-il un ecoulement ou une suppuration de la plaie ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "urinary_burning",
+          "label": "Le patient signale-t-il des brulures urinaires ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "unusual_abdominal_pain",
+          "label": "Y a-t-il des douleurs abdominales inhabituelles ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hemodynamic_differential",
+      "title": "Questions hemodynamiques ciblees",
+      "description": "Aide a departager une hemorragie, une complication cardiaque ou une hypoperfusion severe.",
+      "targets": ["Hemorragie post-op", "Complication cardiaque post-op"],
+      "trigger_ids": ["hemodynamic_alert", "low_map", "high_shock_index", "circulatory_instability"],
+      "source_refs": [
+        {
+          "label": "AHRQ postoperative hemorrhage",
+          "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/professionals/systems/hospital/qitoolkit/d4g-postophemorrhage-bestpractices.pdf"
+        },
+        {
+          "label": "ameli - douleur thoracique urgente",
+          "url": "https://www.ameli.fr/assure/sante/themes/douleur-thoracique/reconnaitre-agit-urgence"
+        }
+      ],
+      "questions": [
+        {
+          "id": "visible_bleeding",
+          "label": "Y a-t-il un saignement visible ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "dressing_saturated",
+          "label": "Le pansement est-il sature ou anormalement souille ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "syncope_malaise",
+          "label": "Le patient a-t-il fait un malaise ou une syncope ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "oppressive_chest_pain",
+          "label": "Y a-t-il une douleur thoracique oppressante ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "palpitations",
+          "label": "Le patient ressent-il des palpitations ou un rythme irregulier ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pain_differential",
+      "title": "Questions douleur ciblees",
+      "description": "Aide a departager une douleur post-op attendue d'une complication organique.",
+      "targets": ["Douleur post-op", "Complication organique"],
+      "trigger_ids": ["pain_like_pattern", "sympathetic_pattern"],
+      "source_refs": [
+        {
+          "label": "ameli - arthroscopie",
+          "url": "https://www.ameli.fr/assure/sante/examen/exploration/deroulement-arthroscopie"
+        },
+        {
+          "label": "PubMed - postoperative pain function",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/25899952/"
+        }
+      ],
+      "questions": [
+        {
+          "id": "pain_at_rest",
+          "label": "Le patient a-t-il mal au repos ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "none", "label": "Non"},
+            {"value": "mild", "label": "Faible"},
+            {"value": "moderate", "label": "Moderee"},
+            {"value": "severe", "label": "Importante"}
+          ]
+        },
+        {
+          "id": "pain_with_mobilization",
+          "label": "La douleur augmente-t-elle a la mobilisation ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "pain_with_cough",
+          "label": "La douleur augmente-t-elle a la toux ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "pain_with_deep_breath",
+          "label": "La douleur augmente-t-elle a l'inspiration profonde ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "no", "label": "Non"},
+            {"value": "yes", "label": "Oui"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        },
+        {
+          "id": "improved_after_rest_or_analgesia",
+          "label": "La douleur s'ameliore-t-elle apres repos ou antalgie ?",
+          "type": "single_choice",
+          "options": [
+            {"value": "yes", "label": "Oui"},
+            {"value": "no", "label": "Non"},
+            {"value": "unknown", "label": "Inconnu"}
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -122,7 +122,11 @@ class CriticityMLService:
         df = pd.read_csv(self.vitals_csv)
         if self.feedback_csv.exists():
             df_feedback = pd.read_csv(self.feedback_csv)
-            df = pd.concat([df, df_feedback], ignore_index=True)
+            if not df_feedback.empty:
+                if df.empty:
+                    df = df_feedback.copy()
+                else:
+                    df = pd.concat([df, df_feedback], ignore_index=True)
         for col in FEATURES + [TARGET]:
             if col not in df.columns:
                 df[col] = 0

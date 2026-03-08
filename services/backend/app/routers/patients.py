@@ -176,6 +176,16 @@ def list_patients(request: Request):
     return items
 
 
+@router.get("/{patient_id}")
+def get_patient(patient_id: str, request: Request):
+    services = request.app.state.services
+    patient = services.postgres.get_patient(patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    patient["last_vitals"] = services.last_vitals.get(patient_id)
+    return _sanitize_patient_identity(patient)
+
+
 @router.get("/{patient_id}/last-vitals")
 def patient_last_vitals(patient_id: str, request: Request):
     services = request.app.state.services
@@ -205,6 +215,8 @@ def refresh_patients(request: Request):
 
     for patient_id in patient_ids:
         services.influx.clear_patient_history(patient_id)
+        services.postgres.clear_patient_alerts(patient_id)
+        services.state.clear_patient(patient_id)
         services.last_vitals.pop(patient_id, None)
     if not services.settings.test_mode:
         services.consumer.publish_refresh_request(assignments)

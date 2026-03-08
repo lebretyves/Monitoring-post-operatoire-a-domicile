@@ -40,7 +40,14 @@ export function AlertsPanel({ alerts, onAck, title = "Alertes" }: AlertsPanelPro
         {alerts.map((alert) => (
           <div key={alert.id} style={{ border: "1px solid #e2e8f0", borderRadius: 14, padding: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-              <strong>{alert.title}</strong>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <strong>{alert.title}</strong>
+                {alert.metric_snapshot.historical_backfill === true && (
+                  <span style={{ background: "#e2e8f0", color: "#334155", padding: "4px 8px", borderRadius: 999, fontSize: 12 }}>
+                    Historique
+                  </span>
+                )}
+              </div>
               <span style={{ color: "#ffffff", background: colors[alert.level] ?? "#334155", padding: "4px 8px", borderRadius: 999 }}>
                 {alert.level}
               </span>

@@ -11,6 +11,8 @@ from app.alerting.engine import AlertEngine
 from app.alerting.rules_loader import load_rules
 from app.alerting.state import AlertState
 from app.llm.client import OllamaClient
+from app.llm.kb import LocalKnowledgeBase
+from app.llm.questionnaire import QuestionnaireEngine
 from app.ml.anomaly import AnomalyService
 from app.ml.criticity_service import CriticityMLService
 from app.mqtt.consumer import MQTTConsumer
@@ -52,6 +54,8 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
             model=settings.ollama_model,
             timeout_seconds=settings.ollama_timeout_seconds,
         )
+        knowledge_base = LocalKnowledgeBase(settings.kb_root)
+        questionnaire_engine = QuestionnaireEngine(settings.questionnaire_rules_path)
         consumer = MQTTConsumer(
             settings=settings,
             state=state,
@@ -74,6 +78,8 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
             anomaly_service=anomaly_service,
             ml_service=ml_service,
             llm_client=llm_client,
+            knowledge_base=knowledge_base,
+            questionnaire_engine=questionnaire_engine,
             consumer=consumer,
         )
         if not settings.test_mode:
@@ -88,6 +94,8 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
                 )
                 for patient_id in patient_ids:
                     influx.clear_patient_history(patient_id)
+                    postgres.clear_patient_alerts(patient_id)
+                    state.clear_patient(patient_id)
                     last_vitals.pop(patient_id, None)
                 consumer.publish_refresh_request(assignments)
                 for assignment in assignments:
@@ -132,8 +140,18 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
         return {"service": "postop-monitoring-backend", "status": "ok"}
 
     @app.get("/health")
-    def health():
-        return {"status": "ok", "test_mode": settings.test_mode}
+    async def health():
+        llm_reachable = await app.state.services.llm_client.probe_generation(timeout_seconds=12)
+        return {
+            "status": "ok",
+            "test_mode": settings.test_mode,
+            "llm": {
+                "enabled": settings.enable_llm,
+                "model": settings.ollama_model,
+                "base_url": settings.ollama_base_url,
+                "reachable": llm_reachable,
+            },
+        }
 
     @app.websocket("/ws/live")
     async def websocket_live(websocket: WebSocket):

@@ -1,5 +1,16 @@
 import type { AlertRecord } from "../types/alerts";
-import type { MlFeedbackPayload, MlPredictionResponse, PatientSummary, TrendResponse, VitalPayload } from "../types/vitals";
+import type {
+  ClinicalPackageResponse,
+  ClinicalContextSelection,
+  MlFeedbackPayload,
+  MlPredictionResponse,
+  PatientSummary,
+  PrioritizationResponse,
+  QuestionnaireSelectionResponse,
+  SummaryResponse,
+  TrendResponse,
+  VitalPayload
+} from "../types/vitals";
 
 const API_BASE = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
 
@@ -13,6 +24,10 @@ async function readJson<T>(path: string): Promise<T> {
 
 export function getPatients(): Promise<PatientSummary[]> {
   return readJson<PatientSummary[]>("/api/patients");
+}
+
+export function getPatient(patientId: string): Promise<PatientSummary> {
+  return readJson<PatientSummary>(`/api/patients/${patientId}`);
 }
 
 export function refreshPatients(): Promise<{
@@ -72,8 +87,53 @@ export function ackAlert(alertId: number): Promise<AlertRecord> {
   });
 }
 
-export function getSummary(patientId: string): Promise<{ patient_id: string; source: string; summary: string }> {
-  return readJson(`/api/summaries/${patientId}`);
+export function getSummary(patientId: string): Promise<SummaryResponse> {
+  return readJson<SummaryResponse>(`/api/summaries/${patientId}`);
+}
+
+export function analyzeSummary(patientId: string, clinicalContext: ClinicalContextSelection): Promise<SummaryResponse> {
+  return fetch(`${API_BASE}/api/summaries/${patientId}/analyze`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(clinicalContext)
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} on contextual summary analysis`);
+    }
+    return response.json() as Promise<SummaryResponse>;
+  });
+}
+
+export function getClinicalPackage(patientId: string): Promise<ClinicalPackageResponse> {
+  return readJson<ClinicalPackageResponse>(`/api/llm/${patientId}/clinical-package`);
+}
+
+export function getDifferentialQuestionnaire(patientId: string): Promise<QuestionnaireSelectionResponse> {
+  return readJson<QuestionnaireSelectionResponse>(`/api/llm/${patientId}/questionnaire`);
+}
+
+export function analyzeClinicalPackage(
+  patientId: string,
+  clinicalContext: ClinicalContextSelection
+): Promise<ClinicalPackageResponse> {
+  return fetch(`${API_BASE}/api/llm/${patientId}/clinical-package`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(clinicalContext)
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} on clinical package analysis`);
+    }
+    return response.json() as Promise<ClinicalPackageResponse>;
+  });
+}
+
+export function getPrioritizedPatients(): Promise<PrioritizationResponse> {
+  return readJson<PrioritizationResponse>("/api/llm/prioritize/patients");
 }
 
 export function getMlPrediction(patientId: string): Promise<MlPredictionResponse> {

@@ -16,7 +16,8 @@ class AlertEngine:
         patient_id = reading["patient_id"]
         alerts: list[dict[str, Any]] = []
         for rule in self.ruleset.get("rules", []):
-            if self._evaluate_logic(patient_id, rule["logic"]):
+            matched = self._evaluate_logic(patient_id, rule["logic"])
+            if matched:
                 cooldown = int(rule.get("cooldown_seconds", self.default_cooldown))
                 if not self.state.should_emit(patient_id, rule["id"], cooldown):
                     continue
@@ -50,6 +51,8 @@ class AlertEngine:
                         | uncertainty,
                     }
                 )
+            else:
+                self.state.set_rule_active(patient_id, rule["id"], False)
         return alerts
 
     def _evaluate_logic(self, patient_id: str, logic: dict[str, Any]) -> bool:

@@ -58,6 +58,52 @@ Ces sources ont servi pour comparer notre approche a ce qui se fait classiquemen
 - [NICE NG51 sepsis][nice-sepsis]
   Utilise pour soutenir une lecture prudente des scores et seuils, toujours interpretes avec le contexte clinique.
 
+### Recommandations retenues pour les alertes simples
+
+Le projet conserve les alertes combinees pour la specificite clinique, mais ajoute aussi des alertes simples
+pour deux raisons:
+
+- detecter plus tot une derive isolee mais cliniquement utile
+- donner au LLM des signaux d'orientation pour le diagnostic differentiel avant confirmation par combinaison ou tendance
+
+Recommandations implementees:
+
+- `TEMP_INFO`: `T >= 38.0`
+- `TEMP_WARNING`: `T >= 38.5`
+- `TEMP_LOW_WARNING`: `T < 36.0`
+- `RR_INFO`: `FR >= 22`
+- `RR_WARNING`: `FR >= 25`
+- `SBP_INFO`: `SBP <= 100`
+- `SBP_CRITICAL`: `SBP <= 90`
+- `FC_INFO`: `FC >= 110`
+- `FC_WARNING`: `FC >= 130`
+- `SpO2` et `TAM` restent surveillees comme avant
+
+Logique retenue:
+
+- `alertes simples` = signal precoce, aide au tri et au LLM
+- `alertes combinees` = signal plus specifique, moins sensible aux faux positifs
+- `alertes de tendance` = degradation dans le temps, essentielle pour le postop a domicile
+
+Sites utilises pour justifier cette approche:
+
+- [RCP, NEWS2][rcp-news2]
+  Chaque constante vitale est interpretee individuellement avant combinaison dans un score global.
+- [RCP, NEWS2 report PDF][rcp-news2-chart2]
+  Confirme l'importance de seuils simples par parametre, y compris pour RR, SBP, FC et temperature.
+- [NICE sepsis][nice-sepsis]
+  Utilise des seuils simples de RR, SBP, temperature et etat clinique en soins primaires/communautaires.
+- [ameli - retour domicile apres coelioscopie][ameli-coelioscopie]
+  Justifie qu'une fievre, un saignement, une douleur thoracique ou une aggravation clinique isolee sont deja des signaux a domicile.
+- [ameli - essoufflement recent][ameli-essoufflement]
+  Renforce l'interet de reperer precocement une derive respiratoire meme avant combinaison complete.
+
+Utilisation retenue par le LLM:
+
+- une alerte simple n'est pas consideree comme un diagnostic
+- elle sert a orienter les hypotheses et a proposer des questions differentielles pertinentes
+- une alerte combinee ou une tendance persistante augmente ensuite la confiance et la priorite
+
 ## Comparaison avec des dashboards open source
 
 Ces projets sont utiles comme comparaison technique d'interface, mais ne servent pas de reference clinique:
@@ -158,6 +204,40 @@ Ces sources viennent du JSON clinique source fourni pour les regles et seuils. E
 - Ajouter une source seulement si elle soutient une decision de scenario, de regle ou de mapping chirurgie/complication.
 - Preferer les societes savantes, recommandations, hopitaux universitaires et revues indexees.
 - Si une source sert a une affirmation precise, ajouter une note de une ligne expliquant ce qu'elle soutient.
+
+## Donnees manquantes utiles au domicile
+
+Dans le cadre du sujet `monitoring post-operatoire a domicile`, il faut privilegier
+des informations realistes, observables par le patient, un proche ou un soignant non specialiste.
+
+Le tableau ci-dessous retient des champs compatibles avec un suivi a domicile, sans examen
+expert ni biologie.
+
+| Champ | Type de reponse | Complications aidees | Priorite | Sources francaises |
+| --- | --- | --- | --- | --- |
+| Dyspnee brutale ou progressive | Choix simple | EP, pneumopathie/IRA, cardiaque | Haute | [ameli - essoufflement recent][ameli-essoufflement], [ameli - embolie pulmonaire][ameli-ep] |
+| Douleur thoracique | Oui/Non + type libre court | EP, cardiaque, pneumopathie | Haute | [ameli - douleur thoracique urgente][ameli-douleur-thoracique], [ameli - embolie pulmonaire][ameli-ep] |
+| Toux | Oui/Non | Pneumopathie/IRA | Haute | [ameli - essoufflement recent][ameli-essoufflement], [nice - pneumonia information][nice-pneumonia-public] |
+| Expectoration / crachats | Oui/Non | Pneumopathie/IRA | Haute | [ameli - essoufflement recent][ameli-essoufflement], [IDSA CAP pathway][idsa-cap-pathway] |
+| Crachats sanglants / hemoptysie | Oui/Non | EP, complication respiratoire severe | Haute | [ameli - embolie pulmonaire][ameli-ep] |
+| Fievre recente / frissons | Oui/Non | Sepsis, pneumopathie, infection de plaie | Haute | [ameli - coelioscopie][ameli-coelioscopie], [nice-sepsis][nice-sepsis] |
+| Rougeur de plaie | Oui/Non | Sepsis, infection de site operatoire | Haute | [ameli - soigner une plaie][ameli-plaie], [CDC SSI][cdc-ssi] |
+| Ecoulement / suppuration de plaie | Oui/Non | Sepsis, infection de site operatoire | Haute | [ameli - soigner une plaie][ameli-plaie], [CDC SSI][cdc-ssi] |
+| Saignement visible / pansement sature | Oui/Non | Hemorragie | Haute | [ameli - coelioscopie][ameli-coelioscopie], [AHRQ postoperative hemorrhage][ahrq-hemorrhage] |
+| Douleur ou gonflement d'un mollet | Oui/Non | TVP / EP | Haute | [ameli - phlebite][ameli-phlebite], [ameli - coelioscopie][ameli-coelioscopie] |
+| Malaise / perte de connaissance | Oui/Non | EP, cardiaque, hemorragie severe | Haute | [ameli - embolie pulmonaire][ameli-ep], [ameli - infarctus][ameli-infarctus] |
+| Douleur a la mobilisation | Echelle simple 0-10 ou Oui/Non | Douleur post-op, hemorragie locale | Moyenne | [ameli - arthroscopie][ameli-arthroscopie], [PubMed postop pain function][pubmed-postop-pain-function] |
+| Douleur a la toux ou a l'inspiration profonde | Oui/Non | Douleur post-op, pneumopathie, EP | Moyenne | [PubMed postop pain cough][pubmed-postop-pain-cough], [ameli - douleur thoracique urgente][ameli-douleur-thoracique] |
+| Vomissements | Oui/Non | Sepsis, complication abdominale, aggravation generale | Moyenne | [ameli - coelioscopie][ameli-coelioscopie] |
+| Brulures urinaires | Oui/Non | Infection / sepsis | Moyenne | [ameli - coelioscopie][ameli-coelioscopie] |
+| Douleurs abdominales inhabituelles | Oui/Non | Sepsis abdominal, hemorragie, complication digestive | Moyenne | [ameli - coelioscopie][ameli-coelioscopie] |
+
+Principes de selection retenus:
+
+- rester sur des informations observables a domicile
+- ne pas demander d'examen expert ou de biologie
+- prioriser les donnees qui aident a departager des hypotheses proches
+- conserver un nombre de champs raisonnable pour la demo
 
 ## Recalibrage temporel du simulateur
 
@@ -272,3 +352,17 @@ Choix retenus par complication:
 [shock-index]: https://www.nature.com/articles/s41598-024-62579-x
 [nhs-augib]: https://apps.worcsacute.nhs.uk/KeyDocumentPortal/Home/DownloadFile/2994
 [sfar-spo2]: https://www.sciencedirect.com/science/article/pii/S127979600583685X/pdf
+[ameli-coelioscopie]: https://www.ameli.fr/assure/sante/examen/exploration/deroulement-coelioscopie
+[ameli-arthroscopie]: https://www.ameli.fr/assure/sante/examen/exploration/deroulement-arthroscopie
+[ameli-plaie]: https://www.ameli.fr/var/assure/sante/bons-gestes/soins/soigner-plaie
+[ameli-ep]: https://www.ameli.fr/assure/sante/urgence/pathologies/embolie-pulmonaire
+[ameli-phlebite]: https://www.ameli.fr/assure/sante/themes/phlebite/symptomes-diagnostic-evolution
+[ameli-essoufflement]: https://www.ameli.fr/assure/sante/themes/essoufflement-recent/je-suis-brutalement-essouffle-et-j-ai-du-mal-respirer-que-faire
+[ameli-douleur-thoracique]: https://www.ameli.fr/assure/sante/themes/douleur-thoracique/reconnaitre-agit-urgence
+[ameli-infarctus]: https://www.ameli.fr/assure/sante/themes/infarctus-myocarde/reconnaitre-infarctus-agir
+[nice-pneumonia-public]: https://www.nice.org.uk/guidance/ng250/informationforpublic
+[idsa-cap-pathway]: https://www.idsociety.org/globalassets/idsa/practice-guidelines/community-acquired-pneumonia-in-adults/cap-clinical-pathway-final-online.pdf
+[cdc-ssi]: https://www.cdc.gov/surgical-site-infections/index.html
+[ahrq-hemorrhage]: https://www.ahrq.gov/sites/default/files/wysiwyg/professionals/systems/hospital/qitoolkit/d4g-postophemorrhage-bestpractices.pdf
+[pubmed-postop-pain-cough]: https://pubmed.ncbi.nlm.nih.gov/12434145/
+[pubmed-postop-pain-function]: https://pubmed.ncbi.nlm.nih.gov/25899952/

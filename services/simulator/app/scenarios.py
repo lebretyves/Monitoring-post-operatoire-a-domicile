@@ -32,6 +32,7 @@ class PatientSimulator:
     tick_seconds: int
     simulated_elapsed_minutes: int
     history_sample_minutes: int
+    history_alert_sample_minutes: int
     current_values: dict[str, float] = field(init=False)
     phase_index: int = 0
     ticks_in_phase: int = 0
@@ -126,7 +127,13 @@ class PatientSimulator:
     def _isoformat(timestamp: datetime) -> str:
         return timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    def _build_payload(self, timestamp: str, *, is_historical: bool) -> VitalPayload:
+    def _build_payload(
+        self,
+        timestamp: str,
+        *,
+        is_historical: bool,
+        backfill_only: bool = False,
+    ) -> VitalPayload:
         noisy = self._apply_noise_and_clamp()
         map_value = int(round(noisy["dbp"] + ((noisy["sbp"] - noisy["dbp"]) / 3.0)))
         return VitalPayload(
@@ -147,6 +154,7 @@ class PatientSimulator:
             postop_day=self._current_postop_day(),
             surgery_type=self.patient.surgery_type,
             is_historical=is_historical,
+            backfill_only=backfill_only,
         )
 
     def _advance_tick(self) -> None:
@@ -161,6 +169,10 @@ class PatientSimulator:
     def build_history(self, reference_ts: datetime) -> tuple[list[VitalPayload], VitalPayload]:
         total_history_ticks = max(0, int((self.simulated_elapsed_minutes * 60) / self.tick_seconds))
         sample_interval_ticks = max(1, int((self.history_sample_minutes * 60) / self.tick_seconds))
+        alert_sample_interval_ticks = max(
+            1,
+            int((self.history_alert_sample_minutes * 60) / self.tick_seconds),
+        )
         history_start = reference_ts - timedelta(minutes=self.simulated_elapsed_minutes)
         history_points: list[VitalPayload] = []
 
@@ -174,10 +186,18 @@ class PatientSimulator:
 
         for tick_index in range(total_history_ticks):
             self._advance_tick()
-            if (tick_index + 1) % sample_interval_ticks != 0:
-                continue
             sample_ts = history_start + timedelta(seconds=(tick_index + 1) * self.tick_seconds)
-            history_points.append(self._build_payload(self._isoformat(sample_ts), is_historical=True))
+            is_graph_sample = (tick_index + 1) % sample_interval_ticks == 0
+            is_alert_sample = (tick_index + 1) % alert_sample_interval_ticks == 0
+            if not is_graph_sample and not is_alert_sample:
+                continue
+            history_points.append(
+                self._build_payload(
+                    self._isoformat(sample_ts),
+                    is_historical=True,
+                    backfill_only=not is_graph_sample,
+                )
+            )
 
         current_payload = self._build_payload(self._isoformat(reference_ts), is_historical=False)
         return history_points, current_payload
@@ -201,6 +221,7 @@ def build_patient_simulators(
     clamp = {key: tuple(value) for key, value in config["clamp"].items()}
     tick_seconds = int(config.get("tick_seconds", 5))
     history_sample_minutes = int(config.get("history_seed_interval_minutes", 15))
+    history_alert_sample_minutes = int(config.get("history_alert_seed_interval_minutes", 1))
     default_baseline = dict(config.get("default_normal_baseline", DEFAULT_NORMAL_BASELINE))
     simulators: list[PatientSimulator] = []
     patient_field_names = {item.name for item in fields(PatientSeed)}
@@ -240,6 +261,7 @@ def build_patient_simulators(
                     )
                 ),
                 history_sample_minutes=history_sample_minutes,
+                history_alert_sample_minutes=history_alert_sample_minutes,
             )
         )
     return simulators

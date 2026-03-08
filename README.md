@@ -138,6 +138,8 @@ make seed
 - [docs/architecture.mmd](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\architecture.mmd)
 - [docs/case-generation.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\case-generation.md)
 - [docs/clinical-references.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\clinical-references.md)
+- [docs/questionnaire-differentiel.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\questionnaire-differentiel.md)
+- [kb/postop-home-monitoring-signs.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\kb\postop-home-monitoring-signs.md)
 - [config/alert_rules.json](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\config\alert_rules.json)
 - [config/simulation_scenarios.json](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\config\simulation_scenarios.json)
 - [config/patients_seed.json](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\config\patients_seed.json)
@@ -166,9 +168,11 @@ Activation type:
 
 ```powershell
 .\scripts\download_meditron_gguf.ps1
-docker compose --profile llm up -d ollama
+docker compose up -d ollama
 .\scripts\setup_ollama_model.ps1 -StartOllama
 ```
+
+Le service `ollama` fait partie du lancement standard. Si `ENABLE_LLM=true`, le backend pointe par defaut vers `meditron-8b-local` avec un timeout de `90 s`.
 
 ## Bonnes pratiques retenues
 
@@ -178,3 +182,4 @@ docker compose --profile llm up -d ollama
 - les donnees patients restent pseudonymisees
 - le modele local est monte via volume externe et n'est pas versionne dans Git
 - les references cliniques et IA/RGPD sont centralisees dans [clinical-references.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\clinical-references.md)
+- une KB locale courte pour le LLM est disponible dans [kb/postop-home-monitoring-signs.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\kb\postop-home-monitoring-signs.md)

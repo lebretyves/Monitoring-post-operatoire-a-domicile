@@ -5,10 +5,10 @@
   "levels": ["INFO", "WARNING", "CRITICAL"],
   "thresholds": {
     "spo2": { "info": 94, "warning": 92, "critical": 90 },
-    "hr": { "info": 105, "warning": 120, "critical": 135 },
+    "hr": { "info": 110, "warning": 130, "critical": 135 },
     "sbp": { "info": 100, "warning": 90, "critical": 80 },
     "map": { "warning": 70, "critical": 65 },
-    "rr": { "info": 22, "warning": 28, "critical": 30 },
+    "rr": { "info": 22, "warning": 25, "critical": 30 },
     "temp": { "info": 38.0, "warning": 38.5, "critical": 39.0, "low_critical": 36.0 },
     "shock_index": { "warning": 0.9, "critical": 1.0 }
   },
@@ -174,6 +174,105 @@
       "logic": {
         "all": [
           { "metric": "spo2", "op": "<", "value": 92, "duration_seconds": 60 }
+        ]
+      }
+    },
+    {
+      "id": "TEMP_INFO",
+      "level": "INFO",
+      "title": "Temperature elevee",
+      "message": "Temperature >= 38.0C sur 60 secondes",
+      "logic": {
+        "all": [
+          { "metric": "temp", "op": ">=", "value": 38.0, "duration_seconds": 60 }
+        ]
+      }
+    },
+    {
+      "id": "TEMP_WARNING",
+      "level": "WARNING",
+      "title": "Fievre soutenue",
+      "message": "Temperature >= 38.5C sur 120 secondes",
+      "logic": {
+        "all": [
+          { "metric": "temp", "op": ">=", "value": 38.5, "duration_seconds": 120 }
+        ]
+      }
+    },
+    {
+      "id": "TEMP_LOW_WARNING",
+      "level": "WARNING",
+      "title": "Hypothermie a surveiller",
+      "message": "Temperature < 36.0C sur 120 secondes",
+      "logic": {
+        "all": [
+          { "metric": "temp", "op": "<", "value": 36.0, "duration_seconds": 120 }
+        ]
+      }
+    },
+    {
+      "id": "RR_INFO",
+      "level": "INFO",
+      "title": "Frequence respiratoire elevee",
+      "message": "FR >= 22/min sur 60 secondes",
+      "logic": {
+        "all": [
+          { "metric": "rr", "op": ">=", "value": 22, "duration_seconds": 60 }
+        ]
+      }
+    },
+    {
+      "id": "RR_WARNING",
+      "level": "WARNING",
+      "title": "Tachypnee soutenue",
+      "message": "FR >= 25/min sur 120 secondes",
+      "logic": {
+        "all": [
+          { "metric": "rr", "op": ">=", "value": 25, "duration_seconds": 120 }
+        ]
+      }
+    },
+    {
+      "id": "SBP_INFO",
+      "level": "INFO",
+      "title": "Pression systolique basse",
+      "message": "SBP <= 100 mmHg sur 120 secondes",
+      "logic": {
+        "all": [
+          { "metric": "sbp", "op": "<=", "value": 100, "duration_seconds": 120 }
+        ]
+      }
+    },
+    {
+      "id": "SBP_CRITICAL",
+      "level": "CRITICAL",
+      "title": "Hypotension systolique",
+      "message": "SBP <= 90 mmHg sur 60 secondes",
+      "logic": {
+        "all": [
+          { "metric": "sbp", "op": "<=", "value": 90, "duration_seconds": 60 }
+        ]
+      }
+    },
+    {
+      "id": "FC_INFO",
+      "level": "INFO",
+      "title": "Frequence cardiaque elevee",
+      "message": "FC >= 110 bpm sur 60 secondes",
+      "logic": {
+        "all": [
+          { "metric": "hr", "op": ">=", "value": 110, "duration_seconds": 60 }
+        ]
+      }
+    },
+    {
+      "id": "FC_WARNING",
+      "level": "WARNING",
+      "title": "Tachycardie soutenue",
+      "message": "FC >= 130 bpm sur 60 secondes",
+      "logic": {
+        "all": [
+          { "metric": "hr", "op": ">=", "value": 130, "duration_seconds": 60 }
         ]
       }
     },

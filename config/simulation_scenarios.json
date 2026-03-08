@@ -2,6 +2,7 @@
   "version": "1.0",
   "tick_seconds": 5,
   "history_seed_interval_minutes": 15,
+  "history_alert_seed_interval_minutes": 1,
   "mqtt": {
     "topic_template": "patients/{patient_id}/vitals",
     "qos": 1

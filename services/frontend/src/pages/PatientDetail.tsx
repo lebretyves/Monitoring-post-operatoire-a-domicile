@@ -4,22 +4,36 @@ import { Link, useParams } from "react-router-dom";
 
 import {
   ackAlert,
+  analyzeClinicalPackage,
+  analyzeSummary,
   exportCsvUrl,
   exportPdfUrl,
   getAlerts,
+  getClinicalPackage,
+  getDifferentialQuestionnaire,
   getHistory,
   getMlPrediction,
-  getPatients,
+  getPatient,
   getSummary,
   submitMlFeedback,
   trainMlModel
 } from "../api/http";
 import { connectLiveSocket } from "../api/ws";
 import { AlertsPanel } from "../components/AlertsPanel";
+import { ClinicalContextPanel } from "../components/ClinicalContextPanel";
+import { DifferentialQuestionnaire } from "../components/DifferentialQuestionnaire";
 import { ScenarioControls } from "../components/ScenarioControls";
 import { VitalChart } from "../components/VitalChart";
 import type { AlertRecord, LiveEvent } from "../types/alerts";
-import type { MlPredictionResponse, PatientSummary, TrendPoint } from "../types/vitals";
+import type {
+  ClinicalContextSelection,
+  ClinicalPackageResponse,
+  MlPredictionResponse,
+  PatientSummary,
+  QuestionnaireSelectionResponse,
+  QuestionnaireSubmission,
+  TrendPoint
+} from "../types/vitals";
 
 export function PatientDetailPage() {
   const { patientId = "" } = useParams();
@@ -27,6 +41,11 @@ export function PatientDetailPage() {
   const [points, setPoints] = useState<TrendPoint[]>([]);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [summary, setSummary] = useState("Chargement...");
+  const [summarySource, setSummarySource] = useState("indisponible");
+  const [summaryLlmStatus, setSummaryLlmStatus] = useState("indisponible");
+  const [summaryStatus, setSummaryStatus] = useState("idle");
+  const [clinicalPackage, setClinicalPackage] = useState<ClinicalPackageResponse | null>(null);
+  const [clinicalPackageStatus, setClinicalPackageStatus] = useState("idle");
   const [hours, setHours] = useState(0);
   const [wsStatus, setWsStatus] = useState("connecting");
   const [mlPrediction, setMlPrediction] = useState<MlPredictionResponse | null>(null);
@@ -34,20 +53,73 @@ export function PatientDetailPage() {
   const [mlComment, setMlComment] = useState("");
   const [mlStatus, setMlStatus] = useState("idle");
   const [mlMessage, setMlMessage] = useState("");
+  const [questionnaire, setQuestionnaire] = useState<QuestionnaireSelectionResponse | null>(null);
+  const [questionnaireStatus, setQuestionnaireStatus] = useState("idle");
+  const [questionnaireSelection, setQuestionnaireSelection] = useState<QuestionnaireSubmission>({
+    responder: "patient",
+    answers: [],
+    comment: "",
+  });
+  const [clinicalContext, setClinicalContext] = useState<ClinicalContextSelection>({
+    patient_factors: [],
+    perioperative_context: [],
+    complications_to_discuss: [],
+    free_text: "",
+  });
 
   const vitals = patient?.last_vitals;
   const currentPathology = vitals?.scenario_label ?? vitals?.scenario ?? "";
   const currentSurgeryType = vitals?.surgery_type ?? patient?.surgery_type ?? "";
   const currentScenario = vitals?.scenario_label ?? vitals?.scenario ?? "Cas clinique non disponible";
+  const activeAlerts = alerts.filter((alert) => alert.metric_snapshot.historical_backfill !== true);
+  const historicalAlerts = alerts.filter((alert) => alert.metric_snapshot.historical_backfill === true);
+
+  function buildAnalysisPayload(): ClinicalContextSelection {
+    const questionnairePayload =
+      questionnaireSelection.answers.length > 0 ||
+      questionnaireSelection.comment.trim() ||
+      questionnaireSelection.responder !== "patient"
+        ? questionnaireSelection
+        : undefined;
+    return {
+      ...clinicalContext,
+      questionnaire: questionnairePayload,
+    };
+  }
+
+  async function refreshDefaultClinicalPackage() {
+    if (!patientId) {
+      return;
+    }
+    setClinicalPackageStatus("loading");
+    try {
+      const response = await getClinicalPackage(patientId);
+      setClinicalPackage(response);
+    } finally {
+      setClinicalPackageStatus("idle");
+    }
+  }
+
+  async function refreshDefaultSummary() {
+    if (!patientId) {
+      return;
+    }
+    setSummaryStatus("loading");
+    try {
+      const response = await getSummary(patientId);
+      setSummary(response.summary);
+    } finally {
+      setSummaryStatus("idle");
+    }
+  }
 
   useEffect(() => {
     let mounted = true;
     const loadBaseContext = async () => {
-      const [patients, history] = await Promise.all([getPatients(), getHistory(patientId, 0)]);
+      const [selected, history] = await Promise.all([getPatient(patientId), getHistory(patientId, 0)]);
       if (!mounted) {
         return;
       }
-      const selected = patients.find((row) => row.id === patientId) ?? null;
       setPatient(selected);
       setPoints(history.points);
       if (!selected) {
@@ -67,22 +139,114 @@ export function PatientDetailPage() {
   useEffect(() => {
     let mounted = true;
     const loadClinicalContext = async () => {
-      const [caseAlerts, patientSummary, prediction] = await Promise.all([
-        getAlerts(undefined, currentPathology, currentSurgeryType),
-        getSummary(patientId),
+      const [caseAlerts, prediction] = await Promise.all([
+        getAlerts(patientId, currentPathology, currentSurgeryType),
         getMlPrediction(patientId).catch(() => null)
       ]);
       if (!mounted) {
         return;
       }
       setAlerts(caseAlerts);
-      setSummary(patientSummary.summary);
       setMlPrediction(prediction);
       setMlPathology(prediction?.pathology ?? currentPathology);
     };
     if (patientId && currentPathology && currentSurgeryType) {
       loadClinicalContext().catch(console.error);
     }
+    return () => {
+      mounted = false;
+    };
+  }, [patientId, currentPathology, currentSurgeryType]);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadSummary = async () => {
+      if (!patientId || !currentPathology || !currentSurgeryType) {
+        return;
+      }
+      setSummaryStatus("loading");
+      try {
+        const response = await getSummary(patientId);
+        if (mounted) {
+          setSummary(response.summary);
+          setSummarySource(response.source);
+          setSummaryLlmStatus(response.llm_status ?? response.source);
+        }
+      } catch (error) {
+        if (mounted) {
+          setSummary("Impossible de charger le resume IA.");
+          setSummarySource("indisponible");
+          setSummaryLlmStatus("indisponible");
+        }
+      } finally {
+        if (mounted) {
+          setSummaryStatus("idle");
+        }
+      }
+    };
+    loadSummary().catch(console.error);
+    return () => {
+      mounted = false;
+    };
+  }, [patientId, currentPathology, currentSurgeryType]);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadClinicalPackage = async () => {
+      if (!patientId || !currentPathology || !currentSurgeryType) {
+        return;
+      }
+      setClinicalPackageStatus("loading");
+      try {
+        const response = await getClinicalPackage(patientId);
+        if (mounted) {
+          setClinicalPackage(response);
+        }
+      } catch (error) {
+        if (mounted) {
+          setClinicalPackage(null);
+        }
+      } finally {
+        if (mounted) {
+          setClinicalPackageStatus("idle");
+        }
+      }
+    };
+    loadClinicalPackage().catch(console.error);
+    return () => {
+      mounted = false;
+    };
+  }, [patientId, currentPathology, currentSurgeryType]);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadQuestionnaire = async () => {
+      if (!patientId) {
+        return;
+      }
+      setQuestionnaireStatus("loading");
+      try {
+        const response = await getDifferentialQuestionnaire(patientId);
+        if (!mounted) {
+          return;
+        }
+        setQuestionnaire(response);
+        setQuestionnaireSelection({
+          responder: "patient",
+          answers: [],
+          comment: "",
+        });
+      } catch (error) {
+        if (mounted) {
+          setQuestionnaire(null);
+        }
+      } finally {
+        if (mounted) {
+          setQuestionnaireStatus("idle");
+        }
+      }
+    };
+    loadQuestionnaire().catch(console.error);
     return () => {
       mounted = false;
     };
@@ -130,6 +294,37 @@ export function PatientDetailPage() {
     }, setWsStatus);
     return cleanup;
   }, [patientId, currentPathology, currentSurgeryType]);
+
+  async function refreshSummaryWithContext() {
+    if (!patientId) {
+      return;
+    }
+    setSummaryStatus("loading");
+    setClinicalPackageStatus("loading");
+    const analysisPayload = buildAnalysisPayload();
+    try {
+      const [summaryResult, packageResult] = await Promise.allSettled([
+        analyzeSummary(patientId, analysisPayload),
+        analyzeClinicalPackage(patientId, analysisPayload),
+      ]);
+      if (summaryResult.status === "fulfilled") {
+        setSummary(summaryResult.value.summary);
+        setSummarySource(summaryResult.value.source);
+        setSummaryLlmStatus(summaryResult.value.llm_status ?? summaryResult.value.source);
+      }
+      if (packageResult.status === "fulfilled") {
+        setClinicalPackage(packageResult.value);
+      }
+      if (summaryResult.status === "rejected" && packageResult.status === "rejected") {
+        throw summaryResult.reason;
+      }
+    } catch (error) {
+      setSummary(error instanceof Error ? error.message : "Impossible de lancer l'analyse IA contextualisee.");
+    } finally {
+      setSummaryStatus("idle");
+      setClinicalPackageStatus("idle");
+    }
+  }
 
   async function refreshMlPrediction() {
     if (!patientId) {
@@ -241,12 +436,153 @@ export function PatientDetailPage() {
       <section style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(260px, 1fr)", gap: 16 }}>
         <ScenarioControls scenario={currentScenario} />
         <div style={{ background: "#ffffff", borderRadius: 18, padding: 16, boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)" }}>
-          <h3 style={{ marginTop: 0 }}>Resume</h3>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <h3 style={{ marginTop: 0, marginBottom: 0 }}>Resume</h3>
+            <div style={{ display: "grid", justifyItems: "end", gap: 4 }}>
+              <span style={{ color: "#64748b", fontSize: 13 }}>
+                {summaryStatus === "loading" ? "Analyse IA contextualisee en cours..." : "Resume clinique"}
+              </span>
+              <span style={{ color: sourceColor(summaryLlmStatus), fontSize: 13, fontWeight: 700 }}>
+                {formatLlmStatus(summaryLlmStatus, summarySource)}
+              </span>
+            </div>
+          </div>
           <p style={{ color: "#334155" }}>{summary}</p>
           <div style={{ color: "#64748b", fontSize: 14 }}>
             Antecedents relies au cas: {(patient?.history ?? []).join(", ") || "non documentes"}
           </div>
         </div>
+      </section>
+
+      <ClinicalContextPanel
+        value={clinicalContext}
+        onChange={setClinicalContext}
+        onAnalyze={refreshSummaryWithContext}
+        loading={summaryStatus === "loading" || clinicalPackageStatus === "loading"}
+      />
+
+      <DifferentialQuestionnaire
+        modules={questionnaire?.modules ?? []}
+        triggerSummary={questionnaire?.trigger_summary ?? []}
+        value={questionnaireSelection}
+        onChange={setQuestionnaireSelection}
+        onSubmit={refreshSummaryWithContext}
+        loading={
+          questionnaireStatus === "loading" ||
+          summaryStatus === "loading" ||
+          clinicalPackageStatus === "loading"
+        }
+      />
+
+      <section style={{ background: "#ffffff", borderRadius: 18, padding: 18, boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)", display: "grid", gap: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <div>
+            <h3 style={{ margin: 0 }}>Analyse clinique IA</h3>
+            <div style={{ color: "#64748b", fontSize: 14 }}>
+              Synthese structuree, explication des alertes, hypotheses compatibles, evolution et priorites de recontrole.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ color: "#475569", fontSize: 13, fontWeight: 700 }}>
+              Source: {formatLlmStatus(clinicalPackage?.llm_status, clinicalPackage?.source)}
+            </div>
+            <button type="button" onClick={() => refreshDefaultClinicalPackage()} style={secondaryButton} disabled={clinicalPackageStatus === "loading"}>
+              {clinicalPackageStatus === "loading" ? "Analyse..." : "Actualiser l'analyse"}
+            </button>
+            <button type="button" onClick={() => refreshDefaultSummary()} style={secondaryButton} disabled={summaryStatus === "loading"}>
+              {summaryStatus === "loading" ? "Resume..." : "Actualiser le resume"}
+            </button>
+          </div>
+        </div>
+
+        {clinicalPackage ? (
+          <>
+            <div style={{ borderRadius: 14, background: "#f8fafc", padding: 14, border: "1px solid #e2e8f0", display: "grid", gap: 8 }}>
+              <div style={{ fontWeight: 700, color: "#0f172a" }}>Synthese structuree</div>
+              <div style={{ color: "#334155" }}>{clinicalPackage.structured_synthesis}</div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+              <RiskExplainCard
+                title="Evolution"
+                level={formatTrajectory(clinicalPackage.trajectory_status)}
+                items={[clinicalPackage.trajectory_explanation]}
+                emptyMessage="Aucune evolution detaillee disponible."
+              />
+              <RiskExplainCard
+                title="Coherence clinique observee"
+                level="Analyse"
+                items={[clinicalPackage.scenario_consistency]}
+                emptyMessage="Pas de coherence de scenario disponible."
+              />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+              <div style={{ borderRadius: 14, background: "#f8fafc", padding: 14, border: "1px solid #e2e8f0", display: "grid", gap: 8 }}>
+                <div style={{ fontWeight: 700, color: "#0f172a" }}>Explication des alertes</div>
+                {clinicalPackage.alert_explanations.length === 0 ? (
+                  <div style={{ color: "#64748b", fontSize: 14 }}>Aucune explication supplementaire disponible.</div>
+                ) : (
+                  <ul style={{ margin: 0, paddingLeft: 18, color: "#334155" }}>
+                    {clinicalPackage.alert_explanations.map((item) => (
+                      <li key={item} style={{ marginBottom: 4 }}>
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div style={{ borderRadius: 14, background: "#f8fafc", padding: 14, border: "1px solid #e2e8f0", display: "grid", gap: 8 }}>
+                <div style={{ fontWeight: 700, color: "#0f172a" }}>A recontroler</div>
+                {clinicalPackage.recheck_recommendations.length === 0 ? (
+                  <div style={{ color: "#64748b", fontSize: 14 }}>Pas de recommandation supplementaire.</div>
+                ) : (
+                  <ul style={{ margin: 0, paddingLeft: 18, color: "#334155" }}>
+                    {clinicalPackage.recheck_recommendations.map((item) => (
+                      <li key={item} style={{ marginBottom: 4 }}>
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ fontWeight: 700, color: "#0f172a" }}>Hypotheses par compatibilite</div>
+              {clinicalPackage.hypothesis_ranking.length === 0 ? (
+                <div style={{ color: "#64748b", fontSize: 14 }}>Aucune hypothese detaillee disponible.</div>
+              ) : (
+                clinicalPackage.hypothesis_ranking.map((row) => (
+                  <div key={`${row.label}-${row.compatibility}`} style={{ borderRadius: 14, background: "#f8fafc", padding: 14, border: "1px solid #e2e8f0", display: "grid", gap: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                      <div style={{ fontWeight: 700, color: "#0f172a" }}>{row.label}</div>
+                      <div style={{ color: compatibilityColor(row.compatibility), fontWeight: 800 }}>
+                        {formatCompatibility(row.compatibility)}
+                      </div>
+                    </div>
+                    <div style={{ color: "#334155", fontSize: 14 }}>
+                      <strong>Arguments pour:</strong> {row.arguments_for.join(" ; ")}
+                    </div>
+                    <div style={{ color: "#475569", fontSize: 14 }}>
+                      <strong>Arguments contre:</strong> {row.arguments_against.join(" ; ")}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div style={{ borderRadius: 14, background: "#f8fafc", padding: 14, border: "1px solid #e2e8f0", display: "grid", gap: 8 }}>
+              <div style={{ fontWeight: 700, color: "#0f172a" }}>Resume de transmission</div>
+              <div style={{ color: "#334155" }}>{clinicalPackage.handoff_summary}</div>
+            </div>
+          </>
+        ) : (
+          <div style={{ color: "#64748b", fontSize: 14 }}>
+            {clinicalPackageStatus === "loading" ? "Analyse clinique IA en cours..." : "Pack d'analyse clinique indisponible pour le moment."}
+          </div>
+        )}
       </section>
 
       <section style={{ background: "#ffffff", borderRadius: 18, padding: 18, boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)", display: "grid", gap: 14 }}>
@@ -264,12 +600,42 @@ export function PatientDetailPage() {
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
           <MetricCard
-            label="Probabilite critique"
-            value={mlPrediction?.probability !== null && mlPrediction?.probability !== undefined ? `${Math.round(mlPrediction.probability * 100)}%` : "N/A"}
+            label="Criticite immediate"
+            value={mlPrediction ? `${mlPrediction.immediate_criticality.score}%` : "N/A"}
+            accentColor={scoreAccentColor(mlPrediction?.immediate_criticality.level)}
           />
+          <MetricCard
+            label="Risque evolutif"
+            value={mlPrediction ? `${mlPrediction.evolving_risk.score}%` : "N/A"}
+            accentColor={scoreAccentColor(mlPrediction?.evolving_risk.level)}
+          />
+          <MetricCard
+            label="Score ML historique"
+            value={
+              mlPrediction?.probability !== null && mlPrediction?.probability !== undefined
+                ? `${Math.round(mlPrediction.probability * 100)}%`
+                : "N/A"
+            }
+            accentColor="#0f172a"
+          />
+          <MetricCard label="Modele" value={mlPrediction?.model_ready ? "Pret" : "En attente"} />
           <MetricCard label="Pathologie" value={mlPrediction?.pathology ?? (currentPathology || "N/A")} />
           <MetricCard label="Chirurgie" value={currentSurgeryType || "N/A"} />
-          <MetricCard label="Modele" value={mlPrediction?.model_ready ? "Pret" : "En attente"} />
+        </div>
+
+        <div style={{ display: "grid", gap: 10 }}>
+          <RiskExplainCard
+            title="Seuils critiques immediats"
+            level={formatRiskLevel(mlPrediction?.immediate_criticality.level)}
+            items={mlPrediction?.immediate_criticality.triggered_thresholds ?? []}
+            emptyMessage="Aucun seuil critique immediat franchi a cet instant."
+          />
+          <RiskExplainCard
+            title="Signaux evolutifs depuis J0"
+            level={formatRiskLevel(mlPrediction?.evolving_risk.level)}
+            items={mlPrediction?.evolving_risk.signals ?? []}
+            emptyMessage="Pas de derive evolutive significative detectee sur la trajectoire."
+          />
         </div>
 
         <label style={{ display: "grid", gap: 6, color: "#334155", fontWeight: 600 }}>
@@ -331,14 +697,17 @@ export function PatientDetailPage() {
         </div>
       </section>
 
-      <AlertsPanel
-        title="Alertes du cas clinique"
-        alerts={alerts}
-        onAck={async (alertId) => {
-          const updated = await ackAlert(alertId);
-          setAlerts((current) => current.map((alert) => (alert.id === updated.id ? updated : alert)));
-        }}
-      />
+      <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+        <AlertsPanel
+          title="Alertes actives"
+          alerts={activeAlerts}
+          onAck={async (alertId) => {
+            const updated = await ackAlert(alertId);
+            setAlerts((current) => current.map((alert) => (alert.id === updated.id ? updated : alert)));
+          }}
+        />
+        <AlertsPanel title="Alertes historiques" alerts={historicalAlerts} />
+      </section>
     </div>
   );
 }
@@ -368,6 +737,38 @@ function MetricCard({
   );
 }
 
+function RiskExplainCard({
+  title,
+  level,
+  items,
+  emptyMessage,
+}: {
+  title: string;
+  level: string;
+  items: string[];
+  emptyMessage: string;
+}) {
+  return (
+    <div style={{ borderRadius: 14, background: "#f8fafc", padding: 14, border: "1px solid #e2e8f0", display: "grid", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 700, color: "#0f172a" }}>{title}</div>
+        <div style={{ color: "#475569", fontSize: 13, fontWeight: 700 }}>{level}</div>
+      </div>
+      {items.length === 0 ? (
+        <div style={{ color: "#64748b", fontSize: 14 }}>{emptyMessage}</div>
+      ) : (
+        <ul style={{ margin: 0, paddingLeft: 18, color: "#334155" }}>
+          {items.slice(0, 6).map((item) => (
+            <li key={item} style={{ marginBottom: 4 }}>
+              {item}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function matchesClinicalContext(alert: AlertRecord, pathology: string, surgeryType: string): boolean {
   const alertPathology = normalizeValue(
     String(alert.metric_snapshot.scenario_label ?? alert.metric_snapshot.scenario ?? "")
@@ -382,6 +783,114 @@ function normalizeValue(value: string): string {
 
 function roundTam(value: number | undefined): number {
   return Math.round(Number(value ?? 0));
+}
+
+function formatRiskLevel(level?: string): string {
+  switch (level) {
+    case "critique":
+      return "Critique";
+    case "seuil_critique_franchi":
+      return "Seuil critique franchi";
+    case "tres_eleve":
+      return "Tres eleve";
+    case "eleve":
+      return "Eleve";
+    case "modere":
+      return "Modere";
+    case "faible":
+      return "Faible";
+    case "stable":
+      return "Stable";
+    default:
+      return "Non evalue";
+  }
+}
+
+function scoreAccentColor(level?: string): string {
+  switch (level) {
+    case "critique":
+    case "seuil_critique_franchi":
+    case "tres_eleve":
+      return "#dc2626";
+    case "eleve":
+    case "modere":
+      return "#ea580c";
+    case "faible":
+    case "stable":
+      return "#15803d";
+    default:
+      return "#0f172a";
+  }
+}
+
+function formatCompatibility(level: "high" | "medium" | "low"): string {
+  switch (level) {
+    case "high":
+      return "Compatibilite forte";
+    case "medium":
+      return "Compatibilite moyenne";
+    case "low":
+      return "Compatibilite faible";
+    default:
+      return "Compatibilite non evaluee";
+  }
+}
+
+function compatibilityColor(level: "high" | "medium" | "low"): string {
+  switch (level) {
+    case "high":
+      return "#b91c1c";
+    case "medium":
+      return "#c2410c";
+    case "low":
+      return "#0f766e";
+    default:
+      return "#475569";
+  }
+}
+
+function formatTrajectory(status: string): string {
+  switch (status) {
+    case "worsening":
+      return "Aggravation";
+    case "switching":
+      return "Bascule";
+    case "recovering":
+      return "Amelioration";
+    case "stable":
+      return "Stabilite";
+    default:
+      return "Non precise";
+  }
+}
+
+function formatLlmStatus(status?: string, source?: string): string {
+  if (status === "ollama" || source === "ollama") {
+    return "Ollama actif";
+  }
+  if (status === "llm-unavailable") {
+    return "Fallback local actif";
+  }
+  if (status === "disabled") {
+    return "LLM desactive";
+  }
+  if (source === "rule-based") {
+    return "Rule-based";
+  }
+  return "Indisponible";
+}
+
+function sourceColor(status?: string): string {
+  if (status === "ollama") {
+    return "#15803d";
+  }
+  if (status === "llm-unavailable") {
+    return "#c2410c";
+  }
+  if (status === "disabled") {
+    return "#64748b";
+  }
+  return "#475569";
 }
 
 const linkButton: CSSProperties = {
