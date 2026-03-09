@@ -16,7 +16,7 @@ from app.llm.questionnaire import QuestionnaireEngine
 from app.ml.anomaly import AnomalyService
 from app.ml.criticity_service import CriticityMLService
 from app.mqtt.consumer import MQTTConsumer
-from app.routers import alerts, export, llm, ml, patients, summaries, trends
+from app.routers import alerts, export, llm, ml, notifications, patients, summaries, trends
 from app.routers.patients import _build_refresh_assignments, _default_monitoring_level
 from app.settings import load_settings
 from app.storage.influx import InfluxStorage, MemoryInfluxStorage
@@ -95,6 +95,7 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
                 for patient_id in patient_ids:
                     influx.clear_patient_history(patient_id)
                     postgres.clear_patient_alerts(patient_id)
+                    postgres.clear_patient_notifications(patient_id)
                     state.clear_patient(patient_id)
                     last_vitals.pop(patient_id, None)
                 consumer.publish_refresh_request(assignments)
@@ -134,6 +135,7 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
     app.include_router(ml.router)
     app.include_router(llm.router)
     app.include_router(summaries.router)
+    app.include_router(notifications.router)
 
     @app.get("/")
     def root():

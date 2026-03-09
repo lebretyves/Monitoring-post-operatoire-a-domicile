@@ -13,8 +13,10 @@ import {
   getDifferentialQuestionnaire,
   getHistory,
   getMlPrediction,
+  getNotifications,
   getPatient,
   getSummary,
+  markNotificationRead,
   submitMlFeedback,
   trainMlModel
 } from "../api/http";
@@ -22,9 +24,10 @@ import { connectLiveSocket } from "../api/ws";
 import { AlertsPanel } from "../components/AlertsPanel";
 import { ClinicalContextPanel } from "../components/ClinicalContextPanel";
 import { DifferentialQuestionnaire } from "../components/DifferentialQuestionnaire";
+import { NotificationCenter } from "../components/NotificationCenter";
 import { ScenarioControls } from "../components/ScenarioControls";
 import { VitalChart } from "../components/VitalChart";
-import type { AlertRecord, LiveEvent } from "../types/alerts";
+import type { AlertRecord, LiveEvent, NotificationRecord } from "../types/alerts";
 import type {
   ClinicalContextSelection,
   ClinicalPackageResponse,
@@ -40,6 +43,7 @@ export function PatientDetailPage() {
   const [patient, setPatient] = useState<PatientSummary | null>(null);
   const [points, setPoints] = useState<TrendPoint[]>([]);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
+  const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [summary, setSummary] = useState("Chargement...");
   const [summarySource, setSummarySource] = useState("indisponible");
   const [summaryLlmStatus, setSummaryLlmStatus] = useState("indisponible");
@@ -55,6 +59,9 @@ export function PatientDetailPage() {
   const [mlMessage, setMlMessage] = useState("");
   const [questionnaire, setQuestionnaire] = useState<QuestionnaireSelectionResponse | null>(null);
   const [questionnaireStatus, setQuestionnaireStatus] = useState("idle");
+  const [browserPermission, setBrowserPermission] = useState<NotificationPermission | "unsupported">(
+    readBrowserPermission()
+  );
   const [questionnaireSelection, setQuestionnaireSelection] = useState<QuestionnaireSubmission>({
     responder: "patient",
     answers: [],
@@ -139,14 +146,16 @@ export function PatientDetailPage() {
   useEffect(() => {
     let mounted = true;
     const loadClinicalContext = async () => {
-      const [caseAlerts, prediction] = await Promise.all([
+      const [caseAlerts, prediction, patientNotifications] = await Promise.all([
         getAlerts(patientId, currentPathology, currentSurgeryType),
-        getMlPrediction(patientId).catch(() => null)
+        getMlPrediction(patientId).catch(() => null),
+        getNotifications(patientId)
       ]);
       if (!mounted) {
         return;
       }
       setAlerts(caseAlerts);
+      setNotifications(patientNotifications.slice(0, 20));
       setMlPrediction(prediction);
       setMlPathology(prediction?.pathology ?? currentPathology);
     };
@@ -290,6 +299,15 @@ export function PatientDetailPage() {
         setAlerts((current) =>
           current.map((alert) => (alert.id === event.payload.id ? (event.payload as AlertRecord) : alert))
         );
+      }
+      if (event.type === "notification") {
+        const notification = event.payload as NotificationRecord;
+        setNotifications((current) => [notification, ...current.filter((item) => item.id !== notification.id)].slice(0, 20));
+        showBrowserNotification(notification);
+      }
+      if (event.type === "notification_read") {
+        const notification = event.payload as NotificationRecord;
+        setNotifications((current) => current.map((item) => (item.id === notification.id ? notification : item)));
       }
     }, setWsStatus);
     return cleanup;
@@ -708,6 +726,24 @@ export function PatientDetailPage() {
         />
         <AlertsPanel title="Alertes historiques" alerts={historicalAlerts} />
       </section>
+
+      <NotificationCenter
+        notifications={notifications}
+        compact
+        onMarkRead={async (notificationId) => {
+          const updated = await markNotificationRead(notificationId);
+          setNotifications((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+        }}
+        browserPermission={browserPermission}
+        onRequestBrowserPermission={async () => {
+          if (!("Notification" in window)) {
+            setBrowserPermission("unsupported");
+            return;
+          }
+          const permission = await window.Notification.requestPermission();
+          setBrowserPermission(permission);
+        }}
+      />
     </div>
   );
 }
@@ -891,6 +927,26 @@ function sourceColor(status?: string): string {
     return "#64748b";
   }
   return "#475569";
+}
+
+function readBrowserPermission(): NotificationPermission | "unsupported" {
+  if (typeof window === "undefined" || !("Notification" in window)) {
+    return "unsupported";
+  }
+  return window.Notification.permission;
+}
+
+function showBrowserNotification(notification: NotificationRecord): void {
+  if (typeof window === "undefined" || !("Notification" in window)) {
+    return;
+  }
+  if (window.Notification.permission !== "granted") {
+    return;
+  }
+  new window.Notification(notification.title, {
+    body: `${notification.patient_id} - ${notification.message}`,
+    tag: `postop-${notification.id}`,
+  });
 }
 
 const linkButton: CSSProperties = {

@@ -61,7 +61,7 @@ huggingface-cli download QuantFactory/Meditron3-8B-GGUF `
 1. Demarrer Ollama:
 
 ```powershell
-docker compose --profile llm up -d ollama
+docker compose up -d ollama
 ```
 
 2. Importer le modele:
@@ -128,3 +128,9 @@ Le backend attend une sortie structuree avec:
 - si la reponse est invalide
 
 alors l'API renvoie une analyse `rule-based` au lieu d'une erreur bloquante.
+
+## Limite actuelle
+
+- le service `ollama` demarre avec la stack standard
+- sur une machine modeste, Meditron peut rester lent sur les routes d'analyse les plus lourdes
+- dans ce cas, l'API et l'UI affichent explicitement que la reponse provient du `Fallback local actif`

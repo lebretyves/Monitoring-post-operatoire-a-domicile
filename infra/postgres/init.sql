@@ -44,3 +44,21 @@ CREATE TABLE IF NOT EXISTS feedback_ml (
     comment TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id BIGSERIAL PRIMARY KEY,
+    patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+    alert_id BIGINT REFERENCES alerts(id) ON DELETE SET NULL,
+    level TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'UNREAD',
+    channel TEXT NOT NULL DEFAULT 'push',
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    read_at TIMESTAMPTZ,
+    read_by TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_patient_created_at ON notifications (patient_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications (status);

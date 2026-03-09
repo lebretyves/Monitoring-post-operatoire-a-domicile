@@ -55,6 +55,23 @@ def test_patients_and_trends_endpoints() -> None:
                         },
                     }
                 )
+                stored_notification = services.postgres.store_notification(
+                    {
+                        "patient_id": "PAT-001",
+                        "alert_id": 1,
+                        "level": "INFO",
+                        "status": "UNREAD",
+                        "channel": "push",
+                        "title": "INFO - Desaturation moderee",
+                        "message": "Notification de test",
+                        "payload": {
+                            "metric_snapshot": {
+                                "scenario_label": "Constantes Normales",
+                                "surgery_type": "cholecystectomie laparoscopique",
+                            }
+                        },
+                    }
+                )
                 services.postgres.store_alert(
                     {
                         "rule_id": "SEPSIS_ALERT",
@@ -141,6 +158,16 @@ def test_patients_and_trends_endpoints() -> None:
                 assert len(alert_rows) == 1
                 assert alert_rows[0]["metric_snapshot"]["scenario_label"] == "Constantes Normales"
                 assert alert_rows[0]["metric_snapshot"]["surgery_type"] == "cholecystectomie laparoscopique"
+
+                notifications_response = client.get("/api/notifications?patient_id=PAT-001")
+                assert notifications_response.status_code == 200
+                notification_rows = notifications_response.json()
+                assert len(notification_rows) == 1
+                assert notification_rows[0]["status"] == "UNREAD"
+
+                mark_read_response = client.post(f"/api/notifications/{stored_notification['id']}/read")
+                assert mark_read_response.status_code == 200
+                assert mark_read_response.json()["status"] == "READ"
 
                 feedback_list_response = client.get(
                     "/api/ml/feedback?pathology=Constantes%20Normales&surgery_type=cholecystectomie%20laparoscopique"

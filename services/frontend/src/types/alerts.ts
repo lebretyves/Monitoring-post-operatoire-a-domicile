@@ -12,8 +12,23 @@ export interface AlertRecord {
   acknowledged_by?: string | null;
 }
 
+export interface NotificationRecord {
+  id: number;
+  patient_id: string;
+  alert_id?: number | null;
+  level: "INFO" | "WARNING" | "CRITICAL";
+  status: "UNREAD" | "READ";
+  channel: string;
+  title: string;
+  message: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+  read_at?: string | null;
+  read_by?: string | null;
+}
+
 export interface LiveEvent {
-  type: "vitals" | "alert" | "ack";
+  type: "vitals" | "alert" | "ack" | "notification" | "notification_read";
   patient_id: string;
   payload: any;
 }

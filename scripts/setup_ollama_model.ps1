@@ -74,7 +74,7 @@ Write-Host "GGUF detecte: $GgufPath" -ForegroundColor Cyan
 
 if ($StartOllama) {
     Write-Host "Demarrage du service Ollama..." -ForegroundColor Cyan
-    docker compose --profile llm up -d ollama
+    docker compose up -d ollama
     if (-not (Wait-OllamaReady)) {
         throw "Ollama ne repond pas apres demarrage."
     }

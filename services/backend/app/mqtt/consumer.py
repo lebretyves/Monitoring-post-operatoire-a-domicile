@@ -10,7 +10,7 @@ import paho.mqtt.client as mqtt
 from app.ml.features import derive_course_features
 from app.mqtt.schemas import VitalPayload
 from app.mqtt.topics import SIMULATOR_REFRESH_TOPIC, parse_patient_topic
-from app.ws.events import alert_event, vitals_event
+from app.ws.events import alert_event, notification_event, vitals_event
 
 
 class MQTTConsumer:
@@ -106,3 +106,26 @@ class MQTTConsumer:
         for alert in generated_alerts:
             stored = self.postgres.store_alert(alert)
             asyncio.run_coroutine_threadsafe(self.ws_manager.broadcast(alert_event(stored)), self.loop)
+            notification = self.postgres.store_notification(
+                {
+                    "patient_id": stored["patient_id"],
+                    "alert_id": stored["id"],
+                    "level": stored["level"],
+                    "status": "UNREAD",
+                    "channel": "push",
+                    "title": f"{stored['level']} - {stored['title']}",
+                    "message": stored["message"],
+                    "payload": {
+                        "rule_id": stored["rule_id"],
+                        "alert_title": stored["title"],
+                        "alert_message": stored["message"],
+                        "status": stored["status"],
+                        "metric_snapshot": stored["metric_snapshot"],
+                    },
+                    "created_at": stored["created_at"],
+                }
+            )
+            asyncio.run_coroutine_threadsafe(
+                self.ws_manager.broadcast(notification_event(notification)),
+                self.loop,
+            )

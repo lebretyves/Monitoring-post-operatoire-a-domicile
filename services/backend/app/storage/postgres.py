@@ -20,10 +20,45 @@ class PostgresStorage:
     def _conn(self):
         return psycopg.connect(self.conninfo, row_factory=dict_row)
 
+    def _ensure_runtime_schema(self) -> None:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id BIGSERIAL PRIMARY KEY,
+                    patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+                    alert_id BIGINT REFERENCES alerts(id) ON DELETE SET NULL,
+                    level TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'UNREAD',
+                    channel TEXT NOT NULL DEFAULT 'push',
+                    title TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    read_at TIMESTAMPTZ,
+                    read_by TEXT
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_notifications_patient_created_at
+                ON notifications (patient_id, created_at DESC)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_notifications_status
+                ON notifications (status)
+                """
+            )
+            conn.commit()
+
     def close(self) -> None:
         return None
 
     def ensure_patients(self, seed_path: str | Path) -> None:
+        self._ensure_runtime_schema()
         patients = json.loads(Path(seed_path).read_text(encoding="utf-8"))
         with self._conn() as conn, conn.cursor() as cur:
             for patient in patients:
@@ -175,6 +210,106 @@ class PostgresStorage:
             )
             conn.commit()
 
+    def store_notification(self, notification: dict[str, Any]) -> dict[str, Any]:
+        created_at = notification.get("created_at")
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO notifications (
+                    patient_id,
+                    alert_id,
+                    level,
+                    status,
+                    channel,
+                    title,
+                    message,
+                    payload,
+                    created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, COALESCE(%s::timestamptz, NOW()))
+                RETURNING id, patient_id, alert_id, level, status, channel, title, message, payload, created_at, read_at, read_by
+                """,
+                (
+                    notification["patient_id"],
+                    notification.get("alert_id"),
+                    notification["level"],
+                    notification.get("status", "UNREAD"),
+                    notification.get("channel", "push"),
+                    notification["title"],
+                    notification["message"],
+                    json.dumps(notification.get("payload", {})),
+                    created_at,
+                ),
+            )
+            row = cur.fetchone()
+            conn.commit()
+        row["created_at"] = row["created_at"].isoformat()
+        row["read_at"] = row["read_at"].isoformat() if row["read_at"] else None
+        return row
+
+    def list_notifications(
+        self,
+        patient_id: str | None = None,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT id, patient_id, alert_id, level, status, channel, title, message, payload, created_at, read_at, read_by
+            FROM notifications
+        """
+        filters: list[str] = []
+        params_list: list[Any] = []
+        if patient_id:
+            filters.append("patient_id = %s")
+            params_list.append(patient_id)
+        if status:
+            filters.append("status = %s")
+            params_list.append(status)
+        if filters:
+            query += " WHERE " + " AND ".join(filters)
+        params: tuple[Any, ...] = tuple(params_list + [limit])
+        query += " ORDER BY created_at DESC LIMIT %s"
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        for row in rows:
+            row["created_at"] = row["created_at"].isoformat()
+            row["read_at"] = row["read_at"].isoformat() if row["read_at"] else None
+        return rows
+
+    def mark_notification_read(self, notification_id: int, user: str) -> dict[str, Any] | None:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE notifications
+                SET status = 'READ',
+                    read_at = NOW(),
+                    read_by = %s
+                WHERE id = %s
+                RETURNING id, patient_id, alert_id, level, status, channel, title, message, payload, created_at, read_at, read_by
+                """,
+                (user, notification_id),
+            )
+            row = cur.fetchone()
+            conn.commit()
+        if not row:
+            return None
+        row["created_at"] = row["created_at"].isoformat()
+        row["read_at"] = row["read_at"].isoformat() if row["read_at"] else None
+        return row
+
+    def clear_patient_notifications(self, patient_id: str) -> None:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM notifications
+                WHERE patient_id = %s
+                """,
+                (patient_id,),
+            )
+            conn.commit()
+
     def store_note(self, patient_id: str, content: str, note_type: str = "summary", source: str = "rule-based") -> None:
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -308,9 +443,11 @@ class MemoryPostgresStorage:
     def __init__(self) -> None:
         self.patients: dict[str, dict[str, Any]] = {}
         self.alerts: list[dict[str, Any]] = []
+        self.notifications: list[dict[str, Any]] = []
         self.notes: list[dict[str, Any]] = []
         self.ml_feedback: list[dict[str, Any]] = []
         self.next_alert_id = 1
+        self.next_notification_id = 1
         self.next_feedback_id = 1
 
     def close(self) -> None:
@@ -390,6 +527,53 @@ class MemoryPostgresStorage:
 
     def clear_patient_alerts(self, patient_id: str) -> None:
         self.alerts = [alert for alert in self.alerts if alert["patient_id"] != patient_id]
+
+    def store_notification(self, notification: dict[str, Any]) -> dict[str, Any]:
+        row = {
+            "id": self.next_notification_id,
+            "patient_id": notification["patient_id"],
+            "alert_id": notification.get("alert_id"),
+            "level": notification["level"],
+            "status": notification.get("status", "UNREAD"),
+            "channel": notification.get("channel", "push"),
+            "title": notification["title"],
+            "message": notification["message"],
+            "payload": notification.get("payload", {}),
+            "created_at": notification.get("created_at") or _utc_now(),
+            "read_at": None,
+            "read_by": None,
+        }
+        self.next_notification_id += 1
+        self.notifications.insert(0, row)
+        return row
+
+    def list_notifications(
+        self,
+        patient_id: str | None = None,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        rows = self.notifications
+        if patient_id:
+            rows = [row for row in rows if row["patient_id"] == patient_id]
+        if status:
+            rows = [row for row in rows if row["status"] == status]
+        return rows[:limit]
+
+    def mark_notification_read(self, notification_id: int, user: str) -> dict[str, Any] | None:
+        for notification in self.notifications:
+            if notification["id"] == notification_id:
+                notification["status"] = "READ"
+                notification["read_by"] = user
+                notification["read_at"] = _utc_now()
+                return notification
+        return None
+
+    def clear_patient_notifications(self, patient_id: str) -> None:
+        self.notifications = [
+            notification for notification in self.notifications if notification["patient_id"] != patient_id
+        ]
 
     def store_note(self, patient_id: str, content: str, note_type: str = "summary", source: str = "rule-based") -> None:
         self.notes.append(

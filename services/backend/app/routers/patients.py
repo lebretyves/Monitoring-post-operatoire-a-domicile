@@ -216,6 +216,7 @@ def refresh_patients(request: Request):
     for patient_id in patient_ids:
         services.influx.clear_patient_history(patient_id)
         services.postgres.clear_patient_alerts(patient_id)
+        services.postgres.clear_patient_notifications(patient_id)
         services.state.clear_patient(patient_id)
         services.last_vitals.pop(patient_id, None)
     if not services.settings.test_mode:

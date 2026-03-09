@@ -22,7 +22,7 @@ class OllamaClient:
                 "prompt": prompt,
                 "stream": False,
                 "format": "json",
-                "options": {"temperature": 0, "num_predict": 220},
+                "options": {"temperature": 0, "num_predict": 160},
             }
             if system:
                 payload["system"] = system
@@ -84,7 +84,7 @@ class OllamaClient:
             "prompt": prompt,
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0, "num_predict": 320},
+            "options": {"temperature": 0, "num_predict": 240},
         }
         if system:
             payload["system"] = system

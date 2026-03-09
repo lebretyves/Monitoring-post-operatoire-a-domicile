@@ -1,10 +1,46 @@
 flowchart LR
-    Simulator[Python simulator\n5 patients] -->|MQTT QoS 1\npatients/{id}/vitals| Mosquitto[ Mosquitto ]
-    Mosquitto --> Backend[FastAPI backend\nconsumer + alert engine]
-    Backend -->|write vitals| Influx[(InfluxDB bucket: vitals)]
-    Backend -->|patients, alerts, notes| Postgres[(PostgreSQL)]
-    Backend -->|REST| Frontend[React dashboard]
-    Backend -->|WebSocket live| Frontend
-    Backend --> ML[IsolationForest optional]
-    Backend --> LLM[Ollama optional]
-    Frontend --> Export[CSV/PDF placeholder]
+    subgraph Simulation["Simulation clinique"]
+        Cases["Catalogue de cas\nchirurgie + complication + J postop"]
+        Simulator["Simulateur Python\nbaseline J0 + trajectoire"]
+        Cases --> Simulator
+    end
+
+    Simulator -->|MQTT QoS 1\npatients/{id}/vitals| Mosquitto["Mosquitto"]
+
+    subgraph Backend["Backend FastAPI"]
+        Consumer["Consumer MQTT\nvalidation + enrichissement"]
+        Alerting["Alert engine\nalertes simples, combinees,\nhistoriques et actives"]
+        Scoring["Scoring\ncriticite immediate + risque evolutif + ML"]
+        LLM["IA clinique\nresume, pack clinique,\nscenario-review, priorisation"]
+        Questionnaire["Questionnaire differentiel\ntronc commun + modules cibles"]
+        Context["Contexte patient\nterrain + peri-op + complications discutees"]
+        Consumer --> Alerting
+        Consumer --> Scoring
+        Questionnaire --> LLM
+        Context --> LLM
+    end
+
+    Mosquitto --> Consumer
+
+    Consumer -->|historique J0 -> maintenant\n+ live| Influx[("InfluxDB\nvitals + tendances")]
+    Consumer -->|patients, alertes,\nnotes, feedback| Postgres[("PostgreSQL")]
+
+    Influx --> Scoring
+    Influx --> LLM
+    Postgres --> Alerting
+    Postgres --> LLM
+    Alerting --> Postgres
+
+    subgraph Frontend["Frontend React"]
+        Patients["Page Patients\nmonitoring global + priorisation"]
+        Detail["Page PatientDetail\ngraphes, alertes,\ncontexte, questionnaire, IA"]
+        Export["Export CSV / PDF"]
+    end
+
+    Backend -->|REST| Patients
+    Backend -->|REST| Detail
+    Backend -->|WebSocket live| Patients
+    Backend -->|WebSocket live| Detail
+    Detail --> Export
+
+    LLM -->|Ollama local\nMeditron ou fallback local| Ollama["Ollama"]

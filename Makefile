@@ -23,7 +23,7 @@ refresh-alerts:
 	docker compose exec backend python /workspace/scripts/backfill_alert_uncertainty.py
 
 llm-up:
-	docker compose --profile llm up -d ollama
+	docker compose up -d ollama
 
 llm-download:
 	powershell -ExecutionPolicy Bypass -File .\scripts\download_meditron_gguf.ps1

@@ -13,3 +13,11 @@ def alert_event(alert: dict[str, Any]) -> dict[str, Any]:
 
 def ack_event(alert: dict[str, Any]) -> dict[str, Any]:
     return {"type": "ack", "patient_id": alert["patient_id"], "payload": alert}
+
+
+def notification_event(notification: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "notification", "patient_id": notification["patient_id"], "payload": notification}
+
+
+def notification_read_event(notification: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "notification_read", "patient_id": notification["patient_id"], "payload": notification}

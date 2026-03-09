@@ -13,6 +13,7 @@ Regles:
 - Si un danger immediat est suggere, recommande une reevaluation urgente.
 - Si aucune source n'est fournie, ecris exactement: source non disponible.
 - Tu ne connais pas le scenario simule interne.
+- Reponse courte, concrete, sans explication de methode.
 """.strip()
 
 
@@ -38,6 +39,7 @@ Regles:
 - Les alertes simples orientent, les alertes combinees et tendances sont plus specifiques.
 - Ne pose jamais de diagnostic certain.
 - Tu ne connais pas le scenario simule interne.
+- Reponse courte, concrete, et strictement structuree.
 - Reponds uniquement avec un objet JSON conforme.
 """.strip()
 
@@ -49,22 +51,26 @@ Regles:
 - Utilise uniquement les donnees fournies.
 - Priorise selon le risque de deterioration.
 - Tu ne connais pas le scenario simule interne.
+- Retourne des raisons courtes.
 - Reponds uniquement avec un objet JSON conforme.
 """.strip()
 
 
-def _format_course_points(points: list[dict[str, Any]]) -> str:
+def _format_course_points(points: list[dict[str, Any]], *, sample_count: int = 3) -> str:
     if not points:
         return "aucune tendance disponible"
-    indices = sorted({0, len(points) // 3, (2 * len(points)) // 3, len(points) - 1})
+    if sample_count <= 1:
+        indices = [len(points) - 1]
+    else:
+        step = max(1, (len(points) - 1) // (sample_count - 1))
+        indices = sorted({0, *(min(len(points) - 1, step * i) for i in range(sample_count - 1)), len(points) - 1})
     lines: list[str] = []
     for index in indices:
         point = points[index]
         values = point.get("values", {})
         lines.append(
             f"- {point.get('ts')}: FC={values.get('hr')}, SpO2={values.get('spo2')}, "
-            f"SBP={values.get('sbp')}, DBP={values.get('dbp')}, TAM={values.get('map')}, "
-            f"FR={values.get('rr')}, T C={values.get('temp')}"
+            f"TAM={values.get('map')}, FR={values.get('rr')}, T={values.get('temp')}"
         )
     return "\n".join(lines)
 
@@ -81,34 +87,129 @@ def _format_current_vitals(last_vitals: dict[str, Any]) -> str:
     )
 
 
+def _format_baseline_vitals(points: list[dict[str, Any]]) -> str:
+    if not points:
+        return "Baseline J0 non disponible."
+    values = points[0].get("values", {})
+    return (
+        f"Baseline J0: FC {values.get('hr')} bpm, SpO2 {values.get('spo2')}%, "
+        f"SBP {values.get('sbp')} mmHg, DBP {values.get('dbp')} mmHg, "
+        f"TAM {values.get('map')} mmHg, FR {values.get('rr')}/min, T {values.get('temp')} C."
+    )
+
+
 def _course_summary(points: list[dict[str, Any]]) -> str:
     if not points:
         return "historique depuis J0 non disponible"
     start_values = points[0].get("values", {})
     end_values = points[-1].get("values", {})
+    deltas = {
+        "hr": _delta_text(start_values.get("hr"), end_values.get("hr"), "bpm"),
+        "spo2": _delta_text(start_values.get("spo2"), end_values.get("spo2"), "%"),
+        "map": _delta_text(start_values.get("map"), end_values.get("map"), "mmHg"),
+        "rr": _delta_text(start_values.get("rr"), end_values.get("rr"), "/min"),
+        "temp": _delta_text(start_values.get("temp"), end_values.get("temp"), "C"),
+    }
     return (
-        "Evolution depuis J0: "
-        f"FC {start_values.get('hr')} -> {end_values.get('hr')} bpm, "
-        f"SpO2 {start_values.get('spo2')} -> {end_values.get('spo2')}%, "
-        f"SBP {start_values.get('sbp')} -> {end_values.get('sbp')} mmHg, "
-        f"DBP {start_values.get('dbp')} -> {end_values.get('dbp')} mmHg, "
-        f"TAM {start_values.get('map')} -> {end_values.get('map')} mmHg, "
-        f"FR {start_values.get('rr')} -> {end_values.get('rr')}/min, "
-        f"T C {start_values.get('temp')} -> {end_values.get('temp')}."
+        "Resume de trajectoire depuis J0: "
+        f"FC {deltas['hr']}, SpO2 {deltas['spo2']}, TAM {deltas['map']}, "
+        f"FR {deltas['rr']}, T {deltas['temp']}."
     )
+
+
+def _find_change_onset_index(points: list[dict[str, Any]]) -> int:
+    if len(points) < 2:
+        return 0
+    baseline = points[0].get("values", {})
+    for index, point in enumerate(points[1:], start=1):
+        values = point.get("values", {})
+        if _has_meaningful_deviation(baseline, values):
+            return index
+    return max(0, len(points) - min(3, len(points)))
+
+
+def _has_meaningful_deviation(baseline: dict[str, Any], values: dict[str, Any]) -> bool:
+    try:
+        hr_delta = abs(float(values.get("hr", 0)) - float(baseline.get("hr", 0)))
+        spo2_drop = float(baseline.get("spo2", 0)) - float(values.get("spo2", 0))
+        map_drop = float(baseline.get("map", 0)) - float(values.get("map", 0))
+        rr_delta = abs(float(values.get("rr", 0)) - float(baseline.get("rr", 0)))
+        temp_delta = abs(float(values.get("temp", 0)) - float(baseline.get("temp", 0)))
+    except (TypeError, ValueError):
+        return False
+    return (
+        hr_delta >= 10
+        or spo2_drop >= 2
+        or map_drop >= 5
+        or rr_delta >= 4
+        or temp_delta >= 0.3
+    )
+
+
+def _window_extrema(points: list[dict[str, Any]]) -> dict[str, Any]:
+    metrics = ("hr", "spo2", "map", "rr", "temp")
+    extrema: dict[str, Any] = {}
+    if not points:
+        return extrema
+    for metric in metrics:
+        values: list[float] = []
+        for point in points:
+            try:
+                values.append(float(point.get("values", {}).get(metric)))
+            except (TypeError, ValueError):
+                continue
+        if not values:
+            continue
+        extrema[metric] = {"min": min(values), "max": max(values)}
+    return extrema
+
+
+def _format_change_window(points: list[dict[str, Any]]) -> str:
+    if not points:
+        return "Fenetre de modification non disponible."
+    onset_index = _find_change_onset_index(points)
+    window = points[onset_index:]
+    onset_point = window[0]
+    current_point = window[-1]
+    onset_values = onset_point.get("values", {})
+    current_values = current_point.get("values", {})
+    extrema = _window_extrema(window)
+    return (
+        f"Fenetre de modification utile: debut apparent {onset_point.get('ts')} -> maintenant {current_point.get('ts')}.\n"
+        f"- Au debut de derive: FC {onset_values.get('hr')}, SpO2 {onset_values.get('spo2')}, TAM {onset_values.get('map')}, "
+        f"FR {onset_values.get('rr')}, T {onset_values.get('temp')}.\n"
+        f"- Extremes observes: FC max { _pretty_number(extrema.get('hr', {}).get('max')) }, "
+        f"SpO2 min { _pretty_number(extrema.get('spo2', {}).get('min')) }, "
+        f"TAM min { _pretty_number(extrema.get('map', {}).get('min')) }, "
+        f"FR max { _pretty_number(extrema.get('rr', {}).get('max')) }, "
+        f"T max { _pretty_number(extrema.get('temp', {}).get('max')) }.\n"
+        f"- Etat actuel en fin de fenetre: FC {current_values.get('hr')}, SpO2 {current_values.get('spo2')}, "
+        f"TAM {current_values.get('map')}, FR {current_values.get('rr')}, T {current_values.get('temp')}."
+    )
+
+
+def _pretty_number(value: Any) -> str:
+    if value is None:
+        return "non disponible"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if abs(number - round(number)) < 0.01:
+        return str(int(round(number)))
+    return f"{number:.1f}".rstrip("0").rstrip(".")
 
 
 def _format_alerts(alerts: list[dict[str, Any]]) -> str:
     if not alerts:
         return "aucune alerte recente"
     lines: list[str] = []
-    for alert in alerts[:5]:
+    for alert in alerts[:3]:
         snapshot = alert.get("metric_snapshot") or {}
         evidence_mode = snapshot.get("evidence_mode", "non_precise")
         historical = "historique" if snapshot.get("historical_backfill") else "active"
         lines.append(
-            f"- {alert.get('created_at')}: [{alert.get('level')}] {alert.get('title')} - {alert.get('message')} "
-            f"(mode {evidence_mode}, alerte {historical})"
+            f"- [{alert.get('level')}] {alert.get('title')} ({evidence_mode}, {historical})"
         )
     return "\n".join(lines)
 
@@ -123,23 +224,40 @@ def _format_clinical_context(clinical_context: dict[str, Any] | None) -> str:
     free_text = str(clinical_context.get("free_text") or "").strip()
 
     lines = [
-        "Contexte clinique selectionne par l'utilisateur (declaratif, a utiliser comme facteur de risque ou piste de discussion, pas comme preuve):",
+        "Contexte clinique declaratif (facteur de risque, pas preuve):",
         f"- Terrain patient: {', '.join(patient_factors) if patient_factors else 'aucun'}",
         f"- Contexte peri-op: {', '.join(perioperative_context) if perioperative_context else 'aucun'}",
         f"- Complications a discuter: {', '.join(complications) if complications else 'aucune'}",
     ]
     if free_text:
         lines.append(f"- Commentaire libre: {free_text}")
+    questionnaire = clinical_context.get("questionnaire") or {}
+    answered = questionnaire.get("answered_items") or []
+    if answered:
+        lines.append(f"- Reponses questionnaire: {'; '.join(answered[:6])}")
     return "\n".join(lines)
 
 
 def _format_knowledge_excerpt(knowledge_excerpt: str | None) -> str:
     if not knowledge_excerpt:
-        return "Aucune source RAG n'est fournie dans cette requete.\n"
-    return (
-        "Extraits de protocole / base de connaissances fournis:\n"
-        f"{knowledge_excerpt}\n"
-    )
+        return "Source RAG: source non disponible.\n"
+    return f"Extrait RAG utile:\n{knowledge_excerpt}\n"
+
+
+def _delta_text(start_value: Any, end_value: Any, unit: str) -> str:
+    if start_value is None or end_value is None:
+        return "non disponible"
+    try:
+        delta = float(end_value) - float(start_value)
+    except (TypeError, ValueError):
+        return f"{start_value} -> {end_value} {unit}"
+    if abs(delta) < 0.1:
+        sign = "="
+        rendered = "0"
+    else:
+        sign = "+" if delta > 0 else ""
+        rendered = f"{delta:.1f}".rstrip("0").rstrip(".")
+    return f"{start_value} -> {end_value} {unit} ({sign}{rendered})"
 
 
 def _required_keys(schema: dict[str, Any]) -> str:
@@ -158,19 +276,20 @@ def build_summary_prompt(
     knowledge_excerpt: str | None = None,
 ) -> str:
     return (
-        "Analyse ce cas de surveillance post-operatoire a domicile.\n"
+        "Tache unique: produire une synthese clinique courte.\n"
         "Redige uniquement en francais.\n"
-        "Fais une aide a l'orientation clinique, pas un diagnostic.\n"
         "Retourne uniquement un JSON compact de la forme {\"summary\":\"...\"}.\n"
-        "Le champ summary doit contenir les 6 rubriques demandees, en texte concis et lisible.\n"
-        "Si aucun protocole ou extrait RAG n'est fourni, ecris exactement 'source non disponible' dans la section 6.\n"
-        "Si un signe de gravite immediate est present, ecris dans la synthese 'Urgence potentielle a evaluer immediatement'.\n"
-        "Tu ne connais pas le scenario simule interne et tu dois proposer toi-meme les hypotheses compatibles.\n"
+        "Le champ summary doit tenir en 4 phrases maximum.\n"
+        "Contenu attendu, dans cet ordre: etat global; signaux anormaux; hypotheses compatibles; quoi recontroler.\n"
+        "Si un signe de gravite immediate est present, commence par 'Urgence potentielle a evaluer immediatement'.\n"
+        "N'ajoute ni plan detaille, ni explication de methode, ni JSON imbrique.\n"
         f"Identifiant pseudonymise: {patient['id']}\n"
         f"Chirurgie: {last_vitals.get('surgery_type', patient['surgery_type'])}\n"
         f"Jour post-op: {last_vitals.get('postop_day', patient['postop_day'])}\n"
+        f"{_format_baseline_vitals(history_points)}\n"
         f"Dernieres constantes: {_format_current_vitals(last_vitals)}.\n"
         f"{_course_summary(history_points)}\n"
+        f"{_format_change_window(history_points)}\n"
         f"{_format_clinical_context(clinical_context)}\n"
         f"Alertes recentes:\n{_format_alerts(alerts)}\n"
         f"{_format_knowledge_excerpt(knowledge_excerpt)}"
@@ -188,17 +307,19 @@ def build_scenario_review_prompt(
 ) -> str:
     return (
         "Analyse la coherence clinique du scenario post-operatoire courant.\n"
-        "Tu dois evaluer si les constantes, tendances et alertes sont compatibles avec le scenario annonce.\n"
-        "Tu restes prudent. Tu ne fais pas de diagnostic autonome.\n"
-        f"Tu reponds en francais, mais uniquement dans un objet JSON avec les cles: {_required_keys(schema)}.\n"
+        "Tache unique: dire si les constantes et tendances sont compatibles avec le scenario annonce.\n"
+        f"Reponds en francais, uniquement dans un objet JSON avec les cles: {_required_keys(schema)}.\n"
+        "Reste bref: alternatives <= 3, supporting_signals <= 4, contradicting_signals <= 3.\n"
         f"Identifiant pseudonymise: {patient['id']}\n"
         f"Chirurgie: {last_vitals.get('surgery_type', patient['surgery_type'])}\n"
         f"Jour post-op: {last_vitals.get('postop_day', patient['postop_day'])}\n"
         f"Scenario courant: {last_vitals.get('scenario_label') or last_vitals.get('scenario')}\n"
+        f"{_format_baseline_vitals(recent_points)}\n"
         f"Constantes actuelles: {_format_current_vitals(last_vitals)}\n"
         f"Alertes recentes:\n{_format_alerts(alerts)}\n"
         f"{_format_clinical_context(clinical_context)}\n"
-        f"Evolution de J0 a maintenant:\n{_format_course_points(recent_points)}\n"
+        f"{_course_summary(recent_points)}\n"
+        f"{_format_change_window(recent_points)}\n"
         f"{_format_knowledge_excerpt(knowledge_excerpt)}"
         "Retourne uniquement un objet JSON conforme au schema fourni."
     )
@@ -214,16 +335,25 @@ def build_clinical_package_prompt(
     knowledge_excerpt: str | None = None,
 ) -> str:
     return (
-        "Construis un pack d'analyse clinique structure pour un patient de surveillance post-operatoire a domicile.\n"
-        f"Redige uniquement en francais, mais dans un objet JSON avec les cles: {_required_keys(schema)}.\n"
-        "Tu ne connais pas le scenario simule interne et tu dois proposer les complications les plus compatibles.\n"
+        "Tache unique: produire un pack d'analyse clinique structure et compact.\n"
+        f"Redige uniquement en francais dans un objet JSON avec les cles: {_required_keys(schema)}.\n"
+        "Contraintes:\n"
+        "- structured_synthesis: 2 phrases max.\n"
+        "- alert_explanations: 3 items max, 1 phrase courte par item.\n"
+        "- hypothesis_ranking: 3 hypotheses max.\n"
+        "- arguments_for et arguments_against: 2 items max par hypothese.\n"
+        "- trajectory_explanation: 1 phrase.\n"
+        "- recheck_recommendations: 3 items max.\n"
+        "- handoff_summary: 3 phrases max.\n"
+        "- scenario_consistency: 1 phrase sur la coherence clinique observee, sans mentionner de scenario cache.\n"
         f"Identifiant pseudonymise: {patient['id']}\n"
         f"Chirurgie: {last_vitals.get('surgery_type', patient['surgery_type'])}\n"
         f"Jour post-op: {last_vitals.get('postop_day', patient['postop_day'])}\n"
+        f"{_format_baseline_vitals(history_points)}\n"
         f"Constantes actuelles: {_format_current_vitals(last_vitals)}\n"
         f"Alertes recentes:\n{_format_alerts(alerts)}\n"
         f"{_course_summary(history_points)}\n"
-        f"Evolution de J0 a maintenant:\n{_format_course_points(history_points)}\n"
+        f"{_format_change_window(history_points)}\n"
         f"{_format_clinical_context(clinical_context)}\n"
         f"{_format_knowledge_excerpt(knowledge_excerpt)}"
         "Retourne uniquement un objet JSON conforme au schema fourni."
@@ -245,10 +375,10 @@ def build_prioritization_prompt(
         for snapshot in patient_snapshots
     ]
     return (
-        "Priorise les patients a revoir en premier dans une file de surveillance post-operatoire a domicile.\n"
+        "Tache unique: prioriser les patients a revoir en premier.\n"
         "Classe les patients selon le risque actuel et evolutif de deterioration.\n"
-        "Reste prudent et n'utilise que les donnees fournies.\n"
         "Retourne uniquement un objet JSON avec la cle prioritized_patients.\n"
+        "Contraintes: 1 ligne de raison courte par patient.\n"
         f"Patients a classer: {concise_snapshots}\n"
         f"{_format_knowledge_excerpt(knowledge_excerpt)}"
         "Retourne uniquement un objet JSON conforme au schema fourni."

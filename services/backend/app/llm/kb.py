@@ -20,13 +20,13 @@ class LocalKnowledgeBase:
         except OSError:
             return None
 
-        max_chars = 900
+        max_chars = 500
         if topic == "clinical_package":
-            max_chars = 1200
-        elif topic == "prioritization":
             max_chars = 700
+        elif topic == "prioritization":
+            max_chars = 300
         elif topic == "scenario_review":
-            max_chars = 800
+            max_chars = 500
         elif topic == "summary":
-            max_chars = 900
+            max_chars = 400
         return content[:max_chars].strip() if content.strip() else None

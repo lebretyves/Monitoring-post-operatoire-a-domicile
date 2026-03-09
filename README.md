@@ -10,8 +10,9 @@ Projet MBA1 Epitech du 4 mars 2026. L'objectif est simple: un projet simple qui 
 - InfluxDB pour les constantes vitales temps reel
 - PostgreSQL pour les patients, alertes, notes et feedback ML
 - React + Vite pour le dashboard
-- IsolationForest et Ollama en options non bloquantes
-- Meditron 8B `.gguf` local via Ollama possible pour le bonus LLM
+- IsolationForest pour le bonus anomalies
+- Ollama local pour le bonus LLM, avec fallback `rule-based` visible
+- Meditron 8B `.gguf` local via Ollama pour les analyses IA
 
 ## Demarrage rapide
 
@@ -71,13 +72,14 @@ Ports par defaut:
 5. Afficher le graphe `Depuis J0` pour montrer la trajectoire clinique complete.
 6. Basculer ensuite sur `24h`, `6h` ou `1h` pour zoomer la phase recente.
 7. Afficher les alertes `INFO`, `WARNING`, `CRITICAL`.
-8. Marquer une alerte comme vue depuis l'UI.
-9. Montrer le resume patient et la revue de scenario par le LLM.
-10. Sur la fiche patient, montrer le score ML longitudinal puis classer le cas et re-entrainer le modele.
+8. Montrer les alertes actives puis les alertes historiques du cas.
+9. Marquer une alerte comme vue depuis l'UI.
+10. Montrer le resume patient et le pack clinique IA, avec etat `Ollama actif` ou `Fallback local actif`.
+11. Sur la fiche patient, montrer le score ML longitudinal puis classer le cas et re-entrainer le modele.
 
 ## Mapping Must Have
 
-- `M1` Simulateur multi-patients: 5 patients en continu (`PAT-001` a `PAT-005`) avec FC, SpO2, PA, MAP, T, FR, tous initialises sur une baseline normale a `J0`.
+- `M1` Simulateur multi-patients: 5 patients en continu (`PAT-001` a `PAT-005`) avec FC, SpO2, PA, MAP, T, FR. Le projet garde un temoin sain et plusieurs cas pathologiques de severite croissante, avec une baseline normale a `J0` puis des trajectoires postop differenciees.
 - `M2` MQTT: Mosquitto + topics `patients/{id}/vitals` + QoS 1.
 - `M3` Stockage temps reel: InfluxDB obligatoire pour `vitals`, PostgreSQL pour relationnel.
 - `M4` Dashboard web: React temps reel via REST + WebSocket.
@@ -87,11 +89,13 @@ Ports par defaut:
 
 ## Extras inclus sans casser la demo
 
-- ML anomalies: placeholder actif cote backend (`IsolationForest`) si active.
-- LLM summary: client Ollama optionnel, sinon resume heuristique local.
+- ML anomalies: `IsolationForest` actif cote backend, secondaire dans l'UI.
+- LLM summary: client Ollama actif avec fallback heuristique local visible si le modele ne repond pas.
 - Historique `Depuis J0`, `24h`, `6h`, `1h` et tendances: endpoints et affichage frontend.
 - Profils patients: antecedents, chirurgie, jour post-op dans `patients_seed.json`.
-- Export CSV/PDF et notifications: endpoints placeholder dans l'API.
+- Contexte patient et questionnaire differentiel: enrichissent l'analyse IA sans modifier le simulateur.
+- Export CSV/PDF: endpoints reels dans l'API.
+- Notifications: centre de notifications in-app + notifications navigateur sur alertes live.
 
 ## Endpoints principaux
 
@@ -105,6 +109,8 @@ Ports par defaut:
 - `GET /api/export/{patient_id}/pdf`
 - `GET /api/summaries/{patient_id}`
 - `GET /api/llm/{patient_id}/scenario-review`
+- `GET /api/llm/{patient_id}/clinical-package`
+- `GET /api/llm/prioritize/patients`
 - `GET /api/ml/{patient_id}/predict`
 - `POST /api/ml/{patient_id}/feedback`
 - `POST /api/ml/train`
@@ -152,9 +158,11 @@ make seed
 - Chaque cas commence sur une baseline normale a `J0`, puis le simulateur reconstruit l'histoire complete jusqu'au temps clinique courant observe entre `J0` et `J3`.
 - Les complications progressives se construisent sur plusieurs heures/jours cliniques simules; les complications brutales gardent un delai d'apparition aleatoire pendant la surveillance.
 - Le graphe patient permet de voir l'histoire `Depuis J0`, puis de zoomer sur `24h`, `6h` ou `1h`.
-- Le score ML et les resumes LLM utilisent maintenant l'histoire `J0 -> maintenant`, pas seulement l'instantane recent.
+- Le score ML et les analyses IA utilisent maintenant l'histoire `J0 -> maintenant`, pas seulement l'instantane recent.
+- Les alertes historiques sont regenerees lors du backfill, puis se distinguent des alertes actives dans la fiche patient.
+- Le contexte patient et le questionnaire differentiel n'influencent pas le simulateur; ils servent uniquement a enrichir l'analyse IA.
 - Le calcul detaille des cas, jours post-op et combinaisons possibles est documente dans [case-generation.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\case-generation.md).
-- Les extras ML et LLM sont facultatifs: ils n'empechent pas la demo si absents.
+- Les extras ML et LLM sont facultatifs: ils n'empechent pas la demo si absents ou si le LLM retombe en fallback local.
 
 ## LLM local
 
@@ -173,6 +181,7 @@ docker compose up -d ollama
 ```
 
 Le service `ollama` fait partie du lancement standard. Si `ENABLE_LLM=true`, le backend pointe par defaut vers `meditron-8b-local` avec un timeout de `90 s`.
+Si le modele ne repond pas dans le delai imparti, l'UI affiche explicitement `Fallback local actif`.
 
 ## Bonnes pratiques retenues
 

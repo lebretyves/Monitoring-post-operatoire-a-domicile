@@ -1,29 +1,39 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { getAlerts, getPatients, getPrioritizedPatients, refreshPatients } from "../api/http";
+import { getAlerts, getNotifications, getPatients, getPrioritizedPatients, markNotificationRead, refreshPatients } from "../api/http";
 import { connectLiveSocket } from "../api/ws";
 import { AlertsPanel } from "../components/AlertsPanel";
-import type { AlertRecord, LiveEvent } from "../types/alerts";
+import { NotificationCenter } from "../components/NotificationCenter";
+import type { AlertRecord, LiveEvent, NotificationRecord } from "../types/alerts";
 import type { PatientPrioritizationRow, PatientSummary } from "../types/vitals";
 
 export function PatientsPage() {
   const [patients, setPatients] = useState<PatientSummary[]>([]);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
+  const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [prioritizedPatients, setPrioritizedPatients] = useState<PatientPrioritizationRow[]>([]);
   const [prioritizationSource, setPrioritizationSource] = useState("indisponible");
   const [prioritizationStatus, setPrioritizationStatus] = useState("indisponible");
   const [wsStatus, setWsStatus] = useState("connecting");
   const [refreshing, setRefreshing] = useState(false);
   const [prioritizing, setPrioritizing] = useState(false);
+  const [browserPermission, setBrowserPermission] = useState<NotificationPermission | "unsupported">(
+    readBrowserPermission()
+  );
   const [refreshNote, setRefreshNote] = useState(
     "Refresh demo: PAT-001 reste en Constantes Normales, les autres slots tirent des cas cliniques complets."
   );
 
   async function loadDashboard() {
-    const [patientRows, alertRows] = await Promise.all([getPatients(), getAlerts()]);
+    const [patientRows, alertRows, notificationRows] = await Promise.all([
+      getPatients(),
+      getAlerts(),
+      getNotifications()
+    ]);
     setPatients(patientRows);
     setAlerts(alertRows.slice(0, 8));
+    setNotifications(notificationRows.slice(0, 20));
   }
 
   async function refreshPrioritization() {
@@ -64,6 +74,17 @@ export function PatientsPage() {
       if (event.type === "ack") {
         setAlerts((current) =>
           current.map((alert) => (alert.id === event.payload.id ? (event.payload as AlertRecord) : alert))
+        );
+      }
+      if (event.type === "notification") {
+        const notification = event.payload as NotificationRecord;
+        setNotifications((current) => [notification, ...current.filter((item) => item.id !== notification.id)].slice(0, 20));
+        showBrowserNotification(notification);
+      }
+      if (event.type === "notification_read") {
+        const notification = event.payload as NotificationRecord;
+        setNotifications((current) =>
+          current.map((item) => (item.id === notification.id ? notification : item))
         );
       }
     }, setWsStatus);
@@ -143,6 +164,25 @@ export function PatientsPage() {
         <div style={{ marginTop: 12, color: "#dbeafe", maxWidth: 1040 }}>{refreshNote}</div>
       </section>
 
+      <NotificationCenter
+        notifications={notifications}
+        onMarkRead={async (notificationId) => {
+          const updated = await markNotificationRead(notificationId);
+          setNotifications((current) =>
+            current.map((item) => (item.id === updated.id ? updated : item))
+          );
+        }}
+        browserPermission={browserPermission}
+        onRequestBrowserPermission={async () => {
+          if (!("Notification" in window)) {
+            setBrowserPermission("unsupported");
+            return;
+          }
+          const permission = await window.Notification.requestPermission();
+          setBrowserPermission(permission);
+        }}
+      />
+
       <section style={{ background: "#ffffff", borderRadius: 20, padding: 18, boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)", display: "grid", gap: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
           <div>
@@ -218,6 +258,26 @@ export function PatientsPage() {
       <AlertsPanel alerts={alerts} />
     </div>
   );
+}
+
+function readBrowserPermission(): NotificationPermission | "unsupported" {
+  if (typeof window === "undefined" || !("Notification" in window)) {
+    return "unsupported";
+  }
+  return window.Notification.permission;
+}
+
+function showBrowserNotification(notification: NotificationRecord): void {
+  if (typeof window === "undefined" || !("Notification" in window)) {
+    return;
+  }
+  if (window.Notification.permission !== "granted") {
+    return;
+  }
+  new window.Notification(notification.title, {
+    body: `${notification.patient_id} - ${notification.message}`,
+    tag: `postop-${notification.id}`,
+  });
 }
 
 function Metric({

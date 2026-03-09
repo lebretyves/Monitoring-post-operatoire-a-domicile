@@ -1,4 +1,4 @@
-import type { AlertRecord } from "../types/alerts";
+import type { AlertRecord, NotificationRecord } from "../types/alerts";
 import type {
   ClinicalPackageResponse,
   ClinicalContextSelection,
@@ -85,6 +85,32 @@ export function ackAlert(alertId: number): Promise<AlertRecord> {
     }
     return response.json() as Promise<AlertRecord>;
   });
+}
+
+export function getNotifications(
+  patientId?: string,
+  status?: "UNREAD" | "READ"
+): Promise<NotificationRecord[]> {
+  const params = new URLSearchParams();
+  if (patientId) {
+    params.set("patient_id", patientId);
+  }
+  if (status) {
+    params.set("status", status);
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return readJson<NotificationRecord[]>(`/api/notifications${suffix}`);
+}
+
+export function markNotificationRead(notificationId: number): Promise<NotificationRecord> {
+  return fetch(`${API_BASE}/api/notifications/${notificationId}/read?user=demo`, { method: "POST" }).then(
+    async (response) => {
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} on notification read`);
+      }
+      return response.json() as Promise<NotificationRecord>;
+    }
+  );
 }
 
 export function getSummary(patientId: string): Promise<SummaryResponse> {
