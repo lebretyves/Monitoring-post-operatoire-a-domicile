@@ -21,3 +21,14 @@ def notification_event(notification: dict[str, Any]) -> dict[str, Any]:
 
 def notification_read_event(notification: dict[str, Any]) -> dict[str, Any]:
     return {"type": "notification_read", "patient_id": notification["patient_id"], "payload": notification}
+
+
+def notifications_reset_event(patient_ids: list[str]) -> dict[str, Any]:
+    return {
+        "type": "notifications_reset",
+        "patient_id": "*",
+        "payload": {
+            "patient_ids": patient_ids,
+            "scope": "refresh",
+        },
+    }

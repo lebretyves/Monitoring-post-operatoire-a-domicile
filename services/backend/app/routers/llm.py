@@ -558,6 +558,139 @@ def _history_delta(history_points: list[dict], key: str, current_value: float) -
     return current_value - float(start.get(key, current_value))
 
 
+def _history_value(point: dict, key: str, default: float = 0.0) -> float:
+    values = point.get("values", {})
+    try:
+        return float(values.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _first_metric_onset(
+    history_points: list[dict],
+    *,
+    metric: str,
+    baseline_value: float,
+    threshold: float,
+    direction: str,
+) -> int | None:
+    if len(history_points) < 2:
+        return None
+    for index, point in enumerate(history_points[1:], start=1):
+        value = _history_value(point, metric, baseline_value)
+        if direction == "rise" and value - baseline_value >= threshold:
+            return index
+        if direction == "drop" and baseline_value - value >= threshold:
+            return index
+        if direction == "abs" and abs(value - baseline_value) >= threshold:
+            return index
+    return None
+
+
+def _temporal_profile(history_points: list[dict]) -> dict[str, Any]:
+    profile: dict[str, Any] = {
+        "abrupt": False,
+        "progressive": False,
+        "fluctuating": False,
+        "respiratory_first": False,
+        "hemodynamic_first": False,
+        "fever_first": False,
+        "spo2_onset": None,
+        "rr_onset": None,
+        "map_onset": None,
+        "temp_onset": None,
+        "hr_onset": None,
+        "onset_index": None,
+    }
+    if len(history_points) < 3:
+        return profile
+
+    baseline = history_points[0].get("values", {})
+    baseline_hr = _history_value(history_points[0], "hr")
+    baseline_spo2 = _history_value(history_points[0], "spo2")
+    baseline_map = _history_value(history_points[0], "map")
+    baseline_rr = _history_value(history_points[0], "rr")
+    baseline_temp = _history_value(history_points[0], "temp")
+
+    hr_onset = _first_metric_onset(
+        history_points, metric="hr", baseline_value=baseline_hr, threshold=10, direction="rise"
+    )
+    spo2_onset = _first_metric_onset(
+        history_points, metric="spo2", baseline_value=baseline_spo2, threshold=2, direction="drop"
+    )
+    map_onset = _first_metric_onset(
+        history_points, metric="map", baseline_value=baseline_map, threshold=5, direction="drop"
+    )
+    rr_onset = _first_metric_onset(
+        history_points, metric="rr", baseline_value=baseline_rr, threshold=4, direction="rise"
+    )
+    temp_onset = _first_metric_onset(
+        history_points, metric="temp", baseline_value=baseline_temp, threshold=0.3, direction="abs"
+    )
+
+    onsets = [value for value in (hr_onset, spo2_onset, map_onset, rr_onset, temp_onset) if value is not None]
+    if not onsets:
+        return profile
+
+    onset_index = min(onsets)
+    total_intervals = max(1, len(history_points) - 1)
+    post_onset_intervals = max(1, total_intervals - onset_index)
+    onset_ratio = onset_index / total_intervals
+    post_onset_ratio = post_onset_intervals / total_intervals
+
+    profile.update(
+        {
+            "spo2_onset": spo2_onset,
+            "rr_onset": rr_onset,
+            "map_onset": map_onset,
+            "temp_onset": temp_onset,
+            "hr_onset": hr_onset,
+            "onset_index": onset_index,
+        }
+    )
+
+    profile["abrupt"] = onset_ratio >= 0.35 and post_onset_ratio <= 0.45
+    profile["progressive"] = onset_ratio <= 0.35 and post_onset_ratio >= 0.5
+
+    respiratory_candidates = [value for value in (spo2_onset, rr_onset) if value is not None]
+    hemodynamic_candidates = [value for value in (map_onset, hr_onset) if value is not None]
+    respiratory_first = (
+        respiratory_candidates
+        and (not hemodynamic_candidates or min(respiratory_candidates) <= min(hemodynamic_candidates))
+    )
+    hemodynamic_first = (
+        hemodynamic_candidates
+        and (not respiratory_candidates or min(hemodynamic_candidates) < min(respiratory_candidates))
+    )
+    fever_first = temp_onset is not None and (
+        (not respiratory_candidates or temp_onset <= min(respiratory_candidates))
+        and (not hemodynamic_candidates or temp_onset <= min(hemodynamic_candidates))
+    )
+
+    profile["respiratory_first"] = bool(respiratory_first)
+    profile["hemodynamic_first"] = bool(hemodynamic_first)
+    profile["fever_first"] = bool(fever_first)
+
+    fluctuation_sign_changes = 0
+    fluctuation_metrics = ("hr", "map", "rr")
+    for metric in fluctuation_metrics:
+        deltas: list[float] = []
+        previous = _history_value(history_points[0], metric)
+        for point in history_points[1:]:
+            current = _history_value(point, metric, previous)
+            deltas.append(current - previous)
+            previous = current
+        previous_sign = 0
+        for delta in deltas:
+            sign = 1 if delta > 0.1 else -1 if delta < -0.1 else 0
+            if previous_sign and sign and sign != previous_sign:
+                fluctuation_sign_changes += 1
+            if sign:
+                previous_sign = sign
+    profile["fluctuating"] = fluctuation_sign_changes >= 3
+    return profile
+
+
 def _objective_hypothesis_rows(
     last_vitals: dict,
     alerts: list[dict],
@@ -575,6 +708,8 @@ def _objective_hypothesis_rows(
     spo2_delta = _history_delta(history_points, "spo2", spo2)
     map_delta = _history_delta(history_points, "map", map_value)
     temp_delta = _history_delta(history_points, "temp", temp)
+    rr_delta = _history_delta(history_points, "rr", rr)
+    temporal = _temporal_profile(history_points)
 
     alert_blob = " ".join(
         f"{str(alert.get('title') or '')} {str(alert.get('message') or '')}".lower() for alert in alerts
@@ -665,6 +800,56 @@ def _objective_hypothesis_rows(
         add("Douleur post-op non controlee possible", 3, "Reponse sympathique sans hypoxemie ni fievre majeure.")
     if map_delta <= -8 and temp < 38.0:
         add("Complication cardiaque post-op possible", 2, f"TAM en baisse de {int(round(map_delta))} mmHg sans syndrome febrile majeur.")
+    if (
+        map_delta <= -8
+        and hr_delta >= 8
+        and 36.0 < temp < 38.0
+        and spo2 >= 92
+        and rr < 25
+    ):
+        add(
+            "Complication cardiaque post-op possible",
+            4,
+            "Baisse de debit compatible avec un profil cardiaque: TAM en baisse, FC en hausse, temperature normale et atteinte respiratoire limitee.",
+        )
+        add(
+            "Complication respiratoire post-op (pneumopathie / IRA)",
+            0,
+            "Atteinte respiratoire peu marquee face a une hypotension et une temperature normale.",
+            against=True,
+        )
+        add(
+            "Sepsis / complication infectieuse possible",
+            0,
+            "Absence de syndrome febrile net malgre une hemodynamique alteree.",
+            against=True,
+        )
+    if shock_index >= 0.9 and map_value < 70 and 36.0 < temp < 38.0 and spo2 >= 92:
+        add(
+            "Complication cardiaque post-op possible",
+            3,
+            f"Shock index {shock_index:.2f} et TAM basse avec temperature normale, compatible avec un bas debit cardiaque.",
+        )
+    if spo2_delta <= -2 and spo2_delta > -5 and map_delta <= -8 and 36.0 < temp < 38.0:
+        add(
+            "Complication cardiaque post-op possible",
+            2,
+            "Baisse moderee de l'oxygenation associee a une degradation hemodynamique sans fievre franche.",
+        )
+    if rr_delta >= 6 and spo2_delta <= -4:
+        add(
+            "Complication cardiaque post-op possible",
+            0,
+            "Polypnee et desaturation plus marquees orientent d'abord vers un mecanisme respiratoire.",
+            against=True,
+        )
+    if spo2 < 90 and rr >= 25:
+        add(
+            "Complication cardiaque post-op possible",
+            0,
+            "Desaturation severe avec FR haute, pattern plus compatible avec une complication respiratoire ou embolique.",
+            against=True,
+        )
 
     if "spo2" in alert_blob or "desaturation" in alert_blob or "resp" in alert_blob:
         add("Complication respiratoire post-op (pneumopathie / IRA)", 1, "Alertes recentes a dominante respiratoire.")
@@ -685,6 +870,213 @@ def _objective_hypothesis_rows(
         add("Complication cardiaque post-op possible", 0, f"Hemodynamique encore preservee avec TAM {int(round(map_value))}.", against=True)
     if spo2 < 94 or temp >= 38.0 or map_value < 70:
         add("Douleur post-op non controlee possible", 0, "Douleur isolee moins probable si hypoxemie, fievre ou hypotension.", against=True)
+
+    if temporal["progressive"]:
+        add(
+            "Sepsis / complication infectieuse possible",
+            2,
+            "Evolution progressive sur plusieurs etapes, compatible avec une complication infectieuse.",
+        )
+        add(
+            "Hemorragie / hypovolemie possible",
+            1,
+            "Degradation progressive compatible avec une hemorragie lente.",
+        )
+        if rr_delta >= 4 or spo2_delta <= -2 or temp >= 38.0:
+            add(
+                "Complication respiratoire post-op (pneumopathie / IRA)",
+                1,
+                "Derive respiratoire progressive compatible avec une complication respiratoire infectieuse.",
+            )
+    if temporal["abrupt"]:
+        add(
+            "Hemorragie / hypovolemie possible",
+            2,
+            "Bascule rapide compatible avec une decompensation hemorragique.",
+        )
+        if temporal["respiratory_first"] and temp < 38.0 and (spo2 < 92 or rr >= 24 or shock_index >= 0.9):
+            add(
+                "Embolie pulmonaire possible",
+                4,
+                "Installation brutale a dominante respiratoire, compatible avec un evenement embolique.",
+            )
+        add(
+            "Complication respiratoire post-op (pneumopathie / IRA)",
+            0,
+            "Evolution trop brutale pour une pneumopathie progressive typique.",
+            against=True,
+        )
+    if temporal["respiratory_first"]:
+        if temp >= 38.0 or temp_delta >= 0.5 or temporal["progressive"]:
+            add(
+                "Complication respiratoire post-op (pneumopathie / IRA)",
+                2,
+                "Les anomalies respiratoires apparaissent avant le retentissement hemodynamique, avec un contexte infectieux ou progressif.",
+            )
+        if temp < 38.0 and temporal["abrupt"]:
+            add(
+                "Embolie pulmonaire possible",
+                2,
+                "Le signal respiratoire apparait precocement avec une installation brutale.",
+            )
+    if temporal["fever_first"]:
+        add(
+            "Sepsis / complication infectieuse possible",
+            3,
+            "La temperature se modifie precocement, en faveur d'une complication infectieuse.",
+        )
+        add(
+            "Complication respiratoire post-op (pneumopathie / IRA)",
+            2,
+            "La temperature augmente avant la degradation hemodynamique, compatible avec une pneumopathie.",
+        )
+        add(
+            "Embolie pulmonaire possible",
+            0,
+            "Une temperature qui derive precocement oriente moins vers une embolie pulmonaire isolee.",
+            against=True,
+        )
+        add(
+            "Complication cardiaque post-op possible",
+            0,
+            "Une derive thermique precoce est peu compatible avec une complication cardiaque isolee.",
+            against=True,
+        )
+        add(
+            "Hemorragie / hypovolemie possible",
+            0,
+            "Une temperature anormale precoce est peu compatible avec une hemorragie isolee.",
+            against=True,
+        )
+    if temporal["hemodynamic_first"]:
+        add(
+            "Hemorragie / hypovolemie possible",
+            2,
+            "Le retentissement hemodynamique precede les anomalies respiratoires.",
+        )
+        add(
+            "Complication cardiaque post-op possible",
+            2,
+            "Le retentissement hemodynamique apparait en premier, compatible avec un bas debit.",
+        )
+        add(
+            "Sepsis / complication infectieuse possible",
+            0,
+            "Une hemodynamique qui se degrade avant la temperature est moins en faveur d'un sepsis typique.",
+            against=True,
+        )
+    if temporal["fluctuating"]:
+        if 36.0 < temp < 38.0 and spo2 >= 95 and map_value >= 85 and rr < 24:
+            add(
+                "Douleur post-op non controlee possible",
+                4,
+                "Profil fluctuant des constantes avec oxygénation et hemodynamique preservees, compatible avec une douleur variant avec l'activite.",
+            )
+            add(
+                "Complication respiratoire post-op (pneumopathie / IRA)",
+                0,
+                "Le profil fluctuant avec oxygenation preservee est moins compatible avec une complication respiratoire progressive.",
+                against=True,
+            )
+            add(
+                "Sepsis / complication infectieuse possible",
+                0,
+                "Le profil fluctuant sans syndrome febrile ni hypotension est peu compatible avec un sepsis evolutif.",
+                against=True,
+            )
+
+    if temp >= 38.0 and temporal["progressive"] and temporal["respiratory_first"]:
+        add(
+            "Complication respiratoire post-op (pneumopathie / IRA)",
+            3,
+            "Desaturation progressive avec fievre et polypnee, profil respiratoire infectieux plausible.",
+        )
+        add(
+            "Embolie pulmonaire possible",
+            0,
+            "La progression et la fievre rendent une EP isolee moins specifique.",
+            against=True,
+        )
+    if temp >= 38.0 and temporal["progressive"] and (temporal["fever_first"] or map_delta <= -5 or map_value < 75):
+        add(
+            "Sepsis / complication infectieuse possible",
+            4,
+            "Association fievre progressive et retentissement hemodynamique, en faveur d'un sepsis.",
+        )
+        add(
+            "Complication respiratoire post-op (pneumopathie / IRA)",
+            0,
+            "Le retentissement hemodynamique progressif avec fievre importante depasse une simple complication respiratoire localisee.",
+            against=True,
+        )
+
+    if map_value < 70 and shock_index >= 0.9 and spo2 >= 95 and 36.0 < temp < 38.0:
+        add(
+            "Hemorragie / hypovolemie possible",
+            3,
+            "Hypoperfusion avec oxygenation preservee et temperature normale, profil compatible avec une hypovolemie.",
+        )
+        add(
+            "Complication cardiaque post-op possible",
+            0,
+            "Oxygenation preservee et absence de retentissement respiratoire limitent l'argument cardiaque.",
+            against=True,
+        )
+    if temporal["abrupt"] and temporal["hemodynamic_first"] and shock_index >= 1.0 and spo2 >= 95 and temp < 38.0:
+        add(
+            "Hemorragie / hypovolemie possible",
+            4,
+            "Bascule hemodynamique brutale avec oxygenation preservee, en faveur d'une hypovolemie aigue.",
+        )
+        add(
+            "Complication cardiaque post-op possible",
+            0,
+            "Une bascule hypovolemique brutale avec SpO2 preservee est moins specifique d'un profil cardiaque.",
+            against=True,
+        )
+    if hr_delta >= 25 and map_delta <= -20 and spo2 >= 95 and rr <= 24 and temp < 38.0:
+        add(
+            "Hemorragie / hypovolemie possible",
+            4,
+            "Association forte FC en hausse, TAM en chute et oxygenation preservee compatible avec une hemorragie.",
+        )
+        add(
+            "Complication cardiaque post-op possible",
+            0,
+            "L'absence d'atteinte respiratoire significative diminue la probabilite d'une complication cardiaque.",
+            against=True,
+        )
+
+    if map_value < 75 and shock_index >= 0.9 and 90 <= spo2 < 95 and rr < 25 and 36.0 < temp < 38.0:
+        add(
+            "Complication cardiaque post-op possible",
+            4,
+            "Bas debit avec desaturation moderee et polypnee limitee, compatible avec une origine cardiaque.",
+        )
+        add(
+            "Hemorragie / hypovolemie possible",
+            0,
+            "Une desaturation associee a un bas debit rend l'hypovolemie pure moins specifique.",
+            against=True,
+        )
+        add(
+            "Embolie pulmonaire possible",
+            0,
+            "Le retentissement respiratoire reste modere et l'hemodynamique se degrade d'abord, ce qui est moins specifique d'une EP.",
+            against=True,
+        )
+    if temporal["abrupt"] and temporal["hemodynamic_first"] and 90 <= spo2 < 95 and rr < 25 and 36.0 < temp < 38.0:
+        add(
+            "Complication cardiaque post-op possible",
+            4,
+            "Bascule brutale a dominante hemodynamique avec atteinte respiratoire moderee et temperature normale, compatible avec une decompensation cardiaque.",
+        )
+        add(
+            "Embolie pulmonaire possible",
+            0,
+            "La polypnee et la desaturation ne sont pas au premier plan malgre une bascule brutale.",
+            against=True,
+        )
 
     def compatibility(score: int) -> str:
         if score >= 6:

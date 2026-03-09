@@ -13,10 +13,8 @@ import {
   getDifferentialQuestionnaire,
   getHistory,
   getMlPrediction,
-  getNotifications,
   getPatient,
   getSummary,
-  markNotificationRead,
   submitMlFeedback,
   trainMlModel
 } from "../api/http";
@@ -24,10 +22,15 @@ import { connectLiveSocket } from "../api/ws";
 import { AlertsPanel } from "../components/AlertsPanel";
 import { ClinicalContextPanel } from "../components/ClinicalContextPanel";
 import { DifferentialQuestionnaire } from "../components/DifferentialQuestionnaire";
-import { NotificationCenter } from "../components/NotificationCenter";
+import {
+  ALARM_STORAGE_KEY,
+  PatientMonitorStrip,
+  type PatientAlarmLimits,
+  loadStoredAlarmLimits,
+} from "../components/PatientMonitorStrip";
 import { ScenarioControls } from "../components/ScenarioControls";
 import { VitalChart } from "../components/VitalChart";
-import type { AlertRecord, LiveEvent, NotificationRecord } from "../types/alerts";
+import type { AlertRecord, LiveEvent } from "../types/alerts";
 import type {
   ClinicalContextSelection,
   ClinicalPackageResponse,
@@ -43,7 +46,6 @@ export function PatientDetailPage() {
   const [patient, setPatient] = useState<PatientSummary | null>(null);
   const [points, setPoints] = useState<TrendPoint[]>([]);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
-  const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [summary, setSummary] = useState("Chargement...");
   const [summarySource, setSummarySource] = useState("indisponible");
   const [summaryLlmStatus, setSummaryLlmStatus] = useState("indisponible");
@@ -59,14 +61,12 @@ export function PatientDetailPage() {
   const [mlMessage, setMlMessage] = useState("");
   const [questionnaire, setQuestionnaire] = useState<QuestionnaireSelectionResponse | null>(null);
   const [questionnaireStatus, setQuestionnaireStatus] = useState("idle");
-  const [browserPermission, setBrowserPermission] = useState<NotificationPermission | "unsupported">(
-    readBrowserPermission()
-  );
   const [questionnaireSelection, setQuestionnaireSelection] = useState<QuestionnaireSubmission>({
     responder: "patient",
     answers: [],
     comment: "",
   });
+  const [alarmLimits, setAlarmLimits] = useState<Record<string, PatientAlarmLimits>>(() => loadStoredAlarmLimits());
   const [clinicalContext, setClinicalContext] = useState<ClinicalContextSelection>({
     patient_factors: [],
     perioperative_context: [],
@@ -80,6 +80,10 @@ export function PatientDetailPage() {
   const currentScenario = vitals?.scenario_label ?? vitals?.scenario ?? "Cas clinique non disponible";
   const activeAlerts = alerts.filter((alert) => alert.metric_snapshot.historical_backfill !== true);
   const historicalAlerts = alerts.filter((alert) => alert.metric_snapshot.historical_backfill === true);
+
+  useEffect(() => {
+    window.localStorage.setItem(ALARM_STORAGE_KEY, JSON.stringify(alarmLimits));
+  }, [alarmLimits]);
 
   function buildAnalysisPayload(): ClinicalContextSelection {
     const questionnairePayload =
@@ -146,16 +150,14 @@ export function PatientDetailPage() {
   useEffect(() => {
     let mounted = true;
     const loadClinicalContext = async () => {
-      const [caseAlerts, prediction, patientNotifications] = await Promise.all([
+      const [caseAlerts, prediction] = await Promise.all([
         getAlerts(patientId, currentPathology, currentSurgeryType),
-        getMlPrediction(patientId).catch(() => null),
-        getNotifications(patientId)
+        getMlPrediction(patientId).catch(() => null)
       ]);
       if (!mounted) {
         return;
       }
       setAlerts(caseAlerts);
-      setNotifications(patientNotifications.slice(0, 20));
       setMlPrediction(prediction);
       setMlPathology(prediction?.pathology ?? currentPathology);
     };
@@ -300,15 +302,6 @@ export function PatientDetailPage() {
           current.map((alert) => (alert.id === event.payload.id ? (event.payload as AlertRecord) : alert))
         );
       }
-      if (event.type === "notification") {
-        const notification = event.payload as NotificationRecord;
-        setNotifications((current) => [notification, ...current.filter((item) => item.id !== notification.id)].slice(0, 20));
-        showBrowserNotification(notification);
-      }
-      if (event.type === "notification_read") {
-        const notification = event.payload as NotificationRecord;
-        setNotifications((current) => current.map((item) => (item.id === notification.id ? notification : item)));
-      }
     }, setWsStatus);
     return cleanup;
   }, [patientId, currentPathology, currentSurgeryType]);
@@ -419,18 +412,6 @@ export function PatientDetailPage() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <button type="button" onClick={() => setHours(0)} style={hourButton(hours === 0)}>
-            Depuis J0
-          </button>
-          <button type="button" onClick={() => setHours(1)} style={hourButton(hours === 1)}>
-            1h
-          </button>
-          <button type="button" onClick={() => setHours(6)} style={hourButton(hours === 6)}>
-            6h
-          </button>
-          <button type="button" onClick={() => setHours(24)} style={hourButton(hours === 24)}>
-            24h
-          </button>
           <a href={exportCsvUrl(patientId)} style={linkButton}>
             Export CSV
           </a>
@@ -440,16 +421,44 @@ export function PatientDetailPage() {
         </div>
       </div>
 
-      <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
-        <MetricCard label="FC" value={vitals ? `${vitals.hr} bpm` : "-"} accentColor="#15803d" />
-        <MetricCard label="SpO2" value={vitals ? `${vitals.spo2}%` : "-"} accentColor="#2563eb" />
-        <MetricCard label="TA" value={vitals ? `${vitals.sbp}/${vitals.dbp}` : "-"} accentColor="#dc2626" />
-        <MetricCard label="TAM" value={vitals ? `${roundTam(vitals.map)}` : "-"} accentColor="#dc2626" />
-        <MetricCard label="FR" value={vitals ? `${vitals.rr}/min` : "-"} accentColor="#eab308" />
-        <MetricCard label={"T\u00B0C"} value={vitals ? `${vitals.temp} \u00B0C` : "-"} accentColor="#7c3aed" />
-      </section>
+      {patient ? (
+        <PatientMonitorStrip
+          patient={patient}
+          limits={alarmLimits[patient.id] ?? {}}
+          onUpdateLimits={(targetPatientId, metric, next) => {
+            setAlarmLimits((current) => ({
+              ...current,
+              [targetPatientId]: {
+                ...(current[targetPatientId] ?? {}),
+                [metric]: next,
+              },
+            }));
+          }}
+          showDetailLink={false}
+          headerTitle="Scope du patient"
+        />
+      ) : null}
 
-      <VitalChart points={points} rangeHours={hours} />
+      <section style={{ display: "grid", gap: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ fontWeight: 800, color: "#0f172a" }}>Historique des constantes vitales</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button type="button" onClick={() => setHours(0)} style={hourButton(hours === 0)}>
+              Depuis J0
+            </button>
+            <button type="button" onClick={() => setHours(1)} style={hourButton(hours === 1)}>
+              1h
+            </button>
+            <button type="button" onClick={() => setHours(6)} style={hourButton(hours === 6)}>
+              6h
+            </button>
+            <button type="button" onClick={() => setHours(24)} style={hourButton(hours === 24)}>
+              24h
+            </button>
+          </div>
+        </div>
+        <VitalChart points={points} rangeHours={hours} />
+      </section>
 
       <section style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(260px, 1fr)", gap: 16 }}>
         <ScenarioControls scenario={currentScenario} />
@@ -727,23 +736,6 @@ export function PatientDetailPage() {
         <AlertsPanel title="Alertes historiques" alerts={historicalAlerts} />
       </section>
 
-      <NotificationCenter
-        notifications={notifications}
-        compact
-        onMarkRead={async (notificationId) => {
-          const updated = await markNotificationRead(notificationId);
-          setNotifications((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-        }}
-        browserPermission={browserPermission}
-        onRequestBrowserPermission={async () => {
-          if (!("Notification" in window)) {
-            setBrowserPermission("unsupported");
-            return;
-          }
-          const permission = await window.Notification.requestPermission();
-          setBrowserPermission(permission);
-        }}
-      />
     </div>
   );
 }
@@ -927,26 +919,6 @@ function sourceColor(status?: string): string {
     return "#64748b";
   }
   return "#475569";
-}
-
-function readBrowserPermission(): NotificationPermission | "unsupported" {
-  if (typeof window === "undefined" || !("Notification" in window)) {
-    return "unsupported";
-  }
-  return window.Notification.permission;
-}
-
-function showBrowserNotification(notification: NotificationRecord): void {
-  if (typeof window === "undefined" || !("Notification" in window)) {
-    return;
-  }
-  if (window.Notification.permission !== "granted") {
-    return;
-  }
-  new window.Notification(notification.title, {
-    body: `${notification.patient_id} - ${notification.message}`,
-    tag: `postop-${notification.id}`,
-  });
 }
 
 const linkButton: CSSProperties = {

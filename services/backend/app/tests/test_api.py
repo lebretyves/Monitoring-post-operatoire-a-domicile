@@ -199,6 +199,7 @@ def test_patients_and_trends_endpoints() -> None:
                 assert payload["status"] == "requested"
                 assert len(payload["assignments"]) >= 5
                 assert client.get("/api/alerts?patient_id=PAT-001").json() == []
+                assert client.get("/api/notifications?patient_id=PAT-001").json() == []
     finally:
         if previous_runtime_dir is None:
             os.environ.pop("ML_RUNTIME_DIR", None)
@@ -248,6 +249,624 @@ def test_historical_points_seed_state_and_store_backfill_alerts() -> None:
                 assert any(alert["metric_snapshot"].get("historical_backfill") is True for alert in alerts)
                 assert services.last_vitals.get("PAT-004") is None
                 assert services.state.latest_snapshot("PAT-004") is not None
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_clinical_package_prioritizes_cardiac_low_output_pattern() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                history = [
+                    {
+                        "ts": "2026-03-04T08:00:00Z",
+                        "patient_id": "PAT-004",
+                        "profile": "baseline_normale",
+                        "scenario": "cardiac_postop_complication",
+                        "scenario_label": "Complication cardiaque post-op rapide",
+                        "hr": 80,
+                        "spo2": 98,
+                        "sbp": 124,
+                        "dbp": 78,
+                        "map": 93,
+                        "rr": 16,
+                        "temp": 36.8,
+                        "room": "A104",
+                        "battery": 96,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie vasculaire majeure",
+                        "shock_index": round(80 / 124, 2),
+                    },
+                    {
+                        "ts": "2026-03-04T09:00:00Z",
+                        "patient_id": "PAT-004",
+                        "profile": "baseline_normale",
+                        "scenario": "cardiac_postop_complication",
+                        "scenario_label": "Complication cardiaque post-op rapide",
+                        "hr": 96,
+                        "spo2": 95,
+                        "sbp": 112,
+                        "dbp": 70,
+                        "map": 84,
+                        "rr": 19,
+                        "temp": 36.9,
+                        "room": "A104",
+                        "battery": 95,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie vasculaire majeure",
+                        "shock_index": round(96 / 112, 2),
+                    },
+                    {
+                        "ts": "2026-03-04T10:00:00Z",
+                        "patient_id": "PAT-004",
+                        "profile": "baseline_normale",
+                        "scenario": "cardiac_postop_complication",
+                        "scenario_label": "Complication cardiaque post-op rapide",
+                        "hr": 116,
+                        "spo2": 92,
+                        "sbp": 94,
+                        "dbp": 60,
+                        "map": 71,
+                        "rr": 23,
+                        "temp": 36.9,
+                        "room": "A104",
+                        "battery": 94,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie vasculaire majeure",
+                        "shock_index": round(116 / 94, 2),
+                    },
+                    {
+                        "ts": "2026-03-04T10:30:00Z",
+                        "patient_id": "PAT-004",
+                        "profile": "baseline_normale",
+                        "scenario": "cardiac_postop_complication",
+                        "scenario_label": "Complication cardiaque post-op rapide",
+                        "hr": 122,
+                        "spo2": 92,
+                        "sbp": 90,
+                        "dbp": 58,
+                        "map": 69,
+                        "rr": 24,
+                        "temp": 36.9,
+                        "room": "A104",
+                        "battery": 93,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie vasculaire majeure",
+                        "shock_index": round(122 / 90, 2),
+                    },
+                ]
+                for reading in history:
+                    services.state.push(reading)
+                    services.influx.write_vital(reading)
+                services.last_vitals["PAT-004"] = history[-1]
+
+                response = client.get("/api/llm/PAT-004/clinical-package")
+                assert response.status_code == 200
+                payload = response.json()
+                assert payload["source"] == "rule-based"
+                assert payload["hypothesis_ranking"][0]["label"] == "Complication cardiaque post-op possible"
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_clinical_package_prioritizes_progressive_pneumonia_over_ep() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                history = [
+                    {
+                        "ts": "2026-03-04T08:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "pneumonia_ira",
+                        "scenario_label": "Pneumopathie ou IRA post-op progressive",
+                        "hr": 80,
+                        "spo2": 97,
+                        "sbp": 124,
+                        "dbp": 78,
+                        "map": 93,
+                        "rr": 16,
+                        "temp": 36.8,
+                        "room": "A102",
+                        "battery": 96,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(80 / 124, 2),
+                    },
+                    {
+                        "ts": "2026-03-04T20:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "pneumonia_ira",
+                        "scenario_label": "Pneumopathie ou IRA post-op progressive",
+                        "hr": 92,
+                        "spo2": 95,
+                        "sbp": 121,
+                        "dbp": 76,
+                        "map": 91,
+                        "rr": 20,
+                        "temp": 37.6,
+                        "room": "A102",
+                        "battery": 95,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(92 / 121, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T08:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "pneumonia_ira",
+                        "scenario_label": "Pneumopathie ou IRA post-op progressive",
+                        "hr": 106,
+                        "spo2": 93,
+                        "sbp": 118,
+                        "dbp": 74,
+                        "map": 89,
+                        "rr": 24,
+                        "temp": 38.2,
+                        "room": "A102",
+                        "battery": 94,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(106 / 118, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T14:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "pneumonia_ira",
+                        "scenario_label": "Pneumopathie ou IRA post-op progressive",
+                        "hr": 114,
+                        "spo2": 90,
+                        "sbp": 114,
+                        "dbp": 72,
+                        "map": 86,
+                        "rr": 28,
+                        "temp": 38.6,
+                        "room": "A102",
+                        "battery": 93,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(114 / 114, 2),
+                    },
+                ]
+                for reading in history:
+                    services.state.push(reading)
+                    services.influx.write_vital(reading)
+                services.last_vitals["PAT-002"] = history[-1]
+
+                response = client.get("/api/llm/PAT-002/clinical-package")
+                assert response.status_code == 200
+                payload = response.json()
+                assert payload["source"] == "rule-based"
+                assert payload["hypothesis_ranking"][0]["label"] == "Complication respiratoire post-op (pneumopathie / IRA)"
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_clinical_package_prioritizes_hemorrhage_over_cardiac_when_hypovolemic() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                history = [
+                    {
+                        "ts": "2026-03-04T08:00:00Z",
+                        "patient_id": "PAT-003",
+                        "profile": "baseline_normale",
+                        "scenario": "hemorrhage_j2",
+                        "scenario_label": "Hemorragie brutale J+2",
+                        "hr": 80,
+                        "spo2": 97,
+                        "sbp": 124,
+                        "dbp": 78,
+                        "map": 93,
+                        "rr": 16,
+                        "temp": 36.8,
+                        "room": "A103",
+                        "battery": 96,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie colorectale",
+                        "shock_index": round(80 / 124, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T06:00:00Z",
+                        "patient_id": "PAT-003",
+                        "profile": "baseline_normale",
+                        "scenario": "hemorrhage_j2",
+                        "scenario_label": "Hemorragie brutale J+2",
+                        "hr": 92,
+                        "spo2": 97,
+                        "sbp": 116,
+                        "dbp": 74,
+                        "map": 88,
+                        "rr": 18,
+                        "temp": 36.8,
+                        "room": "A103",
+                        "battery": 95,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie colorectale",
+                        "shock_index": round(92 / 116, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T07:00:00Z",
+                        "patient_id": "PAT-003",
+                        "profile": "baseline_normale",
+                        "scenario": "hemorrhage_j2",
+                        "scenario_label": "Hemorragie brutale J+2",
+                        "hr": 112,
+                        "spo2": 96,
+                        "sbp": 98,
+                        "dbp": 66,
+                        "map": 77,
+                        "rr": 20,
+                        "temp": 36.7,
+                        "room": "A103",
+                        "battery": 94,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie colorectale",
+                        "shock_index": round(112 / 98, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T07:20:00Z",
+                        "patient_id": "PAT-003",
+                        "profile": "baseline_normale",
+                        "scenario": "hemorrhage_j2",
+                        "scenario_label": "Hemorragie brutale J+2",
+                        "hr": 128,
+                        "spo2": 96,
+                        "sbp": 84,
+                        "dbp": 56,
+                        "map": 65,
+                        "rr": 22,
+                        "temp": 36.7,
+                        "room": "A103",
+                        "battery": 93,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie colorectale",
+                        "shock_index": round(128 / 84, 2),
+                    },
+                ]
+                for reading in history:
+                    services.state.push(reading)
+                    services.influx.write_vital(reading)
+                services.last_vitals["PAT-003"] = history[-1]
+
+                response = client.get("/api/llm/PAT-003/clinical-package")
+                assert response.status_code == 200
+                payload = response.json()
+                assert payload["source"] == "rule-based"
+                assert payload["hypothesis_ranking"][0]["label"] == "Hemorragie / hypovolemie possible"
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_clinical_package_prioritizes_progressive_sepsis_over_pneumonia_when_hemodynamics_drop() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                history = [
+                    {
+                        "ts": "2026-03-04T08:00:00Z",
+                        "patient_id": "PAT-005",
+                        "profile": "baseline_normale",
+                        "scenario": "sepsis_progressive",
+                        "scenario_label": "Sepsis progressif",
+                        "hr": 80,
+                        "spo2": 97,
+                        "sbp": 124,
+                        "dbp": 78,
+                        "map": 93,
+                        "rr": 16,
+                        "temp": 36.8,
+                        "room": "A105",
+                        "battery": 96,
+                        "postop_day": 3,
+                        "surgery_type": "chirurgie colorectale",
+                        "shock_index": round(80 / 124, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T08:00:00Z",
+                        "patient_id": "PAT-005",
+                        "profile": "baseline_normale",
+                        "scenario": "sepsis_progressive",
+                        "scenario_label": "Sepsis progressif",
+                        "hr": 96,
+                        "spo2": 96,
+                        "sbp": 118,
+                        "dbp": 72,
+                        "map": 87,
+                        "rr": 20,
+                        "temp": 37.9,
+                        "room": "A105",
+                        "battery": 95,
+                        "postop_day": 3,
+                        "surgery_type": "chirurgie colorectale",
+                        "shock_index": round(96 / 118, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T16:00:00Z",
+                        "patient_id": "PAT-005",
+                        "profile": "baseline_normale",
+                        "scenario": "sepsis_progressive",
+                        "scenario_label": "Sepsis progressif",
+                        "hr": 112,
+                        "spo2": 94,
+                        "sbp": 106,
+                        "dbp": 62,
+                        "map": 77,
+                        "rr": 24,
+                        "temp": 38.7,
+                        "room": "A105",
+                        "battery": 94,
+                        "postop_day": 3,
+                        "surgery_type": "chirurgie colorectale",
+                        "shock_index": round(112 / 106, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T22:00:00Z",
+                        "patient_id": "PAT-005",
+                        "profile": "baseline_normale",
+                        "scenario": "sepsis_progressive",
+                        "scenario_label": "Sepsis progressif",
+                        "hr": 124,
+                        "spo2": 93,
+                        "sbp": 94,
+                        "dbp": 56,
+                        "map": 69,
+                        "rr": 26,
+                        "temp": 39.1,
+                        "room": "A105",
+                        "battery": 93,
+                        "postop_day": 3,
+                        "surgery_type": "chirurgie colorectale",
+                        "shock_index": round(124 / 94, 2),
+                    },
+                ]
+                for reading in history:
+                    services.state.push(reading)
+                    services.influx.write_vital(reading)
+                services.last_vitals["PAT-005"] = history[-1]
+
+                response = client.get("/api/llm/PAT-005/clinical-package")
+                assert response.status_code == 200
+                payload = response.json()
+                assert payload["source"] == "rule-based"
+                assert payload["hypothesis_ranking"][0]["label"] == "Sepsis / complication infectieuse possible"
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_clinical_package_prioritizes_pain_when_fluctuating_without_infectious_or_respiratory_signals() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                history = [
+                    {
+                        "ts": "2026-03-04T08:00:00Z",
+                        "patient_id": "PAT-006",
+                        "profile": "baseline_normale",
+                        "scenario": "pain_postop_uncontrolled",
+                        "scenario_label": "Douleur post-op non controlee",
+                        "hr": 80,
+                        "spo2": 97,
+                        "sbp": 124,
+                        "dbp": 78,
+                        "map": 93,
+                        "rr": 16,
+                        "temp": 36.8,
+                        "room": "A106",
+                        "battery": 96,
+                        "postop_day": 1,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(80 / 124, 2),
+                    },
+                    {
+                        "ts": "2026-03-04T10:00:00Z",
+                        "patient_id": "PAT-006",
+                        "profile": "baseline_normale",
+                        "scenario": "pain_postop_uncontrolled",
+                        "scenario_label": "Douleur post-op non controlee",
+                        "hr": 108,
+                        "spo2": 97,
+                        "sbp": 138,
+                        "dbp": 86,
+                        "map": 103,
+                        "rr": 22,
+                        "temp": 36.9,
+                        "room": "A106",
+                        "battery": 95,
+                        "postop_day": 1,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(108 / 138, 2),
+                    },
+                    {
+                        "ts": "2026-03-04T13:00:00Z",
+                        "patient_id": "PAT-006",
+                        "profile": "baseline_normale",
+                        "scenario": "pain_postop_uncontrolled",
+                        "scenario_label": "Douleur post-op non controlee",
+                        "hr": 88,
+                        "spo2": 98,
+                        "sbp": 126,
+                        "dbp": 79,
+                        "map": 95,
+                        "rr": 17,
+                        "temp": 36.8,
+                        "room": "A106",
+                        "battery": 94,
+                        "postop_day": 1,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(88 / 126, 2),
+                    },
+                    {
+                        "ts": "2026-03-04T18:00:00Z",
+                        "patient_id": "PAT-006",
+                        "profile": "baseline_normale",
+                        "scenario": "pain_postop_uncontrolled",
+                        "scenario_label": "Douleur post-op non controlee",
+                        "hr": 112,
+                        "spo2": 96,
+                        "sbp": 136,
+                        "dbp": 84,
+                        "map": 101,
+                        "rr": 22,
+                        "temp": 36.9,
+                        "room": "A106",
+                        "battery": 93,
+                        "postop_day": 1,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(112 / 136, 2),
+                    },
+                ]
+                for reading in history:
+                    services.state.push(reading)
+                    services.influx.write_vital(reading)
+                services.last_vitals["PAT-006"] = history[-1]
+
+                response = client.get("/api/llm/PAT-006/clinical-package")
+                assert response.status_code == 200
+                payload = response.json()
+                assert payload["source"] == "rule-based"
+                assert payload["hypothesis_ranking"][0]["label"] == "Douleur post-op non controlee possible"
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_clinical_package_prioritizes_abrupt_cardiac_low_output_over_ep_when_respiratory_burden_is_moderate() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                history = [
+                    {
+                        "ts": "2026-03-04T08:00:00Z",
+                        "patient_id": "PAT-007",
+                        "profile": "baseline_normale",
+                        "scenario": "cardiac_postop_complication",
+                        "scenario_label": "Complication cardiaque post-op rapide",
+                        "hr": 80,
+                        "spo2": 97,
+                        "sbp": 124,
+                        "dbp": 78,
+                        "map": 93,
+                        "rr": 16,
+                        "temp": 36.8,
+                        "room": "A107",
+                        "battery": 96,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie vasculaire majeure",
+                        "shock_index": round(80 / 124, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T14:00:00Z",
+                        "patient_id": "PAT-007",
+                        "profile": "baseline_normale",
+                        "scenario": "cardiac_postop_complication",
+                        "scenario_label": "Complication cardiaque post-op rapide",
+                        "hr": 82,
+                        "spo2": 97,
+                        "sbp": 122,
+                        "dbp": 76,
+                        "map": 91,
+                        "rr": 17,
+                        "temp": 36.8,
+                        "room": "A107",
+                        "battery": 95,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie vasculaire majeure",
+                        "shock_index": round(82 / 122, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T14:20:00Z",
+                        "patient_id": "PAT-007",
+                        "profile": "baseline_normale",
+                        "scenario": "cardiac_postop_complication",
+                        "scenario_label": "Complication cardiaque post-op rapide",
+                        "hr": 118,
+                        "spo2": 94,
+                        "sbp": 92,
+                        "dbp": 60,
+                        "map": 71,
+                        "rr": 22,
+                        "temp": 36.8,
+                        "room": "A107",
+                        "battery": 94,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie vasculaire majeure",
+                        "shock_index": round(118 / 92, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T14:35:00Z",
+                        "patient_id": "PAT-007",
+                        "profile": "baseline_normale",
+                        "scenario": "cardiac_postop_complication",
+                        "scenario_label": "Complication cardiaque post-op rapide",
+                        "hr": 126,
+                        "spo2": 93,
+                        "sbp": 86,
+                        "dbp": 56,
+                        "map": 66,
+                        "rr": 24,
+                        "temp": 36.8,
+                        "room": "A107",
+                        "battery": 93,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie vasculaire majeure",
+                        "shock_index": round(126 / 86, 2),
+                    },
+                ]
+                for reading in history:
+                    services.state.push(reading)
+                    services.influx.write_vital(reading)
+                services.last_vitals["PAT-007"] = history[-1]
+
+                response = client.get("/api/llm/PAT-007/clinical-package")
+                assert response.status_code == 200
+                payload = response.json()
+                assert payload["source"] == "rule-based"
+                assert payload["hypothesis_ranking"][0]["label"] == "Complication cardiaque post-op possible"
     finally:
         if previous_runtime_dir is None:
             os.environ.pop("ML_RUNTIME_DIR", None)

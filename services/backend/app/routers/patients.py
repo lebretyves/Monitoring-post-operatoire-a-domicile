@@ -7,6 +7,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.ws.events import notifications_reset_event
+
 
 router = APIRouter(prefix="/api/patients", tags=["patients"])
 
@@ -199,7 +201,7 @@ def patient_last_vitals(patient_id: str, request: Request):
 
 
 @router.post("/refresh")
-def refresh_patients(request: Request):
+async def refresh_patients(request: Request):
     services = request.app.state.services
     patient_ids = [patient["id"] for patient in services.postgres.list_patients()]
     if not patient_ids:
@@ -219,6 +221,7 @@ def refresh_patients(request: Request):
         services.postgres.clear_patient_notifications(patient_id)
         services.state.clear_patient(patient_id)
         services.last_vitals.pop(patient_id, None)
+    await services.ws_manager.broadcast(notifications_reset_event(patient_ids))
     if not services.settings.test_mode:
         services.consumer.publish_refresh_request(assignments)
 

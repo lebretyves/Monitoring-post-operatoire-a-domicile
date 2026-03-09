@@ -408,14 +408,20 @@ def compute_evolving_risk(
         add_signal(latest_hr >= hr_info, 8, f"FC elevee ({int(round(latest_hr))} bpm)")
         add_signal(shock_rise_course >= 0.2 or shock_rise_6h >= 0.08, 12, "Shock index en hausse sur la trajectoire")
         add_signal(last_shock >= shock_warning, 10, f"Shock index eleve ({last_shock:.2f})")
-        add_signal(spo2_drop_course >= 2, 4, "Baisse moderee de l'oxygenation")
+        add_signal(spo2_drop_course >= 1 and spo2_drop_course <= 4, 6, "Baisse moderee de l'oxygenation")
         add_signal(map_low_fraction_6h >= 0.4, 8, "TAM basse persistante sur les dernieres heures")
+        add_signal(
+            latest_temp < temp_info and latest_rr < 25 and latest_spo2 >= 92,
+            10,
+            "Profil de bas debit avec temperature normale et retentissement respiratoire limite",
+        )
         add_signal(
             map_drop_course >= 10 and (hr_rise_course >= 12 or shock_rise_course >= 0.2),
             12,
             "Baisse de debit progressive compatible avec une complication cardiaque lente",
         )
         apply_penalty(latest_temp >= temp_info, 6, "Temperature elevee moins compatible avec une complication cardiaque isolee")
+        apply_penalty(latest_spo2 < 90 and latest_rr >= 25, 8, "Tableau trop respiratoire pour une complication cardiaque isolee")
     elif scenario_family == "cardiac_postop_complication":
         add_signal(map_drop_1h >= 8, 16, f"TAM en baisse de {int(round(map_drop_1h))} points sur 1h")
         add_signal(latest_map < map_warning, 12, f"TAM basse ({int(round(latest_map))})")
@@ -423,14 +429,20 @@ def compute_evolving_risk(
         add_signal(last_shock >= shock_warning, 10, f"Shock index eleve ({last_shock:.2f})")
         add_signal(hr_rise_1h >= 10, 12, f"FC en hausse de {int(round(hr_rise_1h))} bpm sur 1h")
         add_signal(latest_hr >= hr_info, 8, f"FC elevee ({int(round(latest_hr))} bpm)")
-        add_signal(_positive_drop(_history_delta(one_hour, "spo2")) >= 2, 6, "Oxygenation en baisse recente")
-        add_signal(latest_spo2 <= spo2_info, 6, f"SpO2 basse ({int(round(latest_spo2))}%)")
+        add_signal(_positive_drop(_history_delta(one_hour, "spo2")) >= 1 and _positive_drop(_history_delta(one_hour, "spo2")) <= 4, 6, "Oxygenation en baisse recente mais moderee")
+        add_signal(latest_spo2 <= spo2_info and latest_spo2 >= 90, 6, f"SpO2 moderement basse ({int(round(latest_spo2))}%)")
+        add_signal(
+            latest_temp < temp_info and latest_rr < 25 and latest_spo2 >= 90,
+            12,
+            "Profil de bas debit avec temperature normale et atteinte respiratoire limitee",
+        )
         add_signal(
             map_drop_1h >= 8 and shock_rise_1h >= 0.2 and hr_rise_1h >= 10,
             14,
             "Bascule rapide TAM + shock index + FC compatible avec une complication cardiaque rapide",
         )
         apply_penalty(latest_temp >= temp_info, 6, "Temperature elevee moins compatible avec une complication cardiaque isolee")
+        apply_penalty(latest_spo2 < 90 and latest_rr >= 25, 10, "Desaturation severe avec polypnee importante, pattern moins specifique du cardiaque")
     else:
         add_signal(latest_spo2 <= spo2_info, 8, f"SpO2 basse ({int(round(latest_spo2))}%)")
         add_signal(spo2_drop_course >= 3, 10, f"SpO2 en baisse de {int(round(spo2_drop_course))} points depuis J0")

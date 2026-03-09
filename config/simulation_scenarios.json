@@ -51,9 +51,9 @@
       "copied_from_source_json": true,
       "initial_shift_by_postop_day": {
         "0": { "spo2": 0, "rr": 0, "hr": 0, "temp": 0.0, "sbp": 0, "dbp": 0 },
-        "1": { "spo2": -1, "rr": 1, "hr": 1, "temp": 0.1, "sbp": 0, "dbp": 0 },
-        "2": { "spo2": -2, "rr": 3, "hr": 3, "temp": 0.2, "sbp": -1, "dbp": 0 },
-        "3": { "spo2": -4, "rr": 6, "hr": 6, "temp": 0.5, "sbp": -2, "dbp": -1 }
+        "1": { "spo2": -1, "rr": 1, "hr": 1, "temp": 0.0, "sbp": 0, "dbp": 0 },
+        "2": { "spo2": -3, "rr": 4, "hr": 3, "temp": 0.2, "sbp": -1, "dbp": 0 },
+        "3": { "spo2": -6, "rr": 8, "hr": 7, "temp": 0.6, "sbp": -2, "dbp": -1 }
       },
       "timeline": [
         {
@@ -66,22 +66,22 @@
         {
           "phase": "j1_atelectasie",
           "duration_minutes": 960,
-          "trend_per_10min": { "temp": 0.01 },
-          "target_shift": { "spo2": -2, "rr": 2, "hr": 2, "sbp": -1, "dbp": 0, "temp": 0.1 },
+          "trend_per_10min": { "temp": 0.00 },
+          "target_shift": { "spo2": -3, "rr": 3, "hr": 2, "sbp": -1, "dbp": 0, "temp": 0.05 },
           "adaptation_rate": 0.00012
         },
         {
           "phase": "j2_progression_infectieuse",
           "duration_minutes": 960,
-          "trend_per_10min": { "temp": 0.03 },
-          "target_shift": { "spo2": -4, "rr": 5, "hr": 5, "sbp": -2, "dbp": 0, "temp": 0.4 },
+          "trend_per_10min": { "temp": 0.02 },
+          "target_shift": { "spo2": -5, "rr": 6, "hr": 5, "sbp": -2, "dbp": 0, "temp": 0.35 },
           "adaptation_rate": 0.00018
         },
         {
           "phase": "j3_ira_declaree",
           "duration_minutes": 1200,
           "trend_per_10min": { "temp": 0.05 },
-          "target_shift": { "spo2": -7, "rr": 9, "hr": 9, "sbp": -3, "dbp": -1, "temp": 0.8 },
+          "target_shift": { "spo2": -8, "rr": 10, "hr": 9, "sbp": -3, "dbp": -1, "temp": 0.9 },
           "adaptation_rate": 0.00024
         }
       ]
@@ -109,7 +109,7 @@
     "hemorrhage_j2": {
       "label": "Hemorragie brutale J+2 apres colectomie",
       "copied_from_source_json": true,
-      "onset_delay_range_minutes": [720, 2880],
+      "onset_delay_range_minutes": [1440, 4320],
       "timeline": [
         {
           "phase": "compensated_bleed",
@@ -158,37 +158,37 @@
       "copied_from_source_json": true,
       "initial_shift_by_postop_day": {
         "0": { "temp": 0.0, "hr": 0, "rr": 0, "sbp": 0, "dbp": 0, "spo2": 0.0 },
-        "1": { "temp": 0.1, "hr": 2, "rr": 1, "sbp": 0, "dbp": -1, "spo2": 0.0 },
-        "2": { "temp": 0.4, "hr": 5, "rr": 3, "sbp": -1, "dbp": -4, "spo2": 0.0 },
-        "3": { "temp": 0.8, "hr": 9, "rr": 5, "sbp": -3, "dbp": -8, "spo2": -0.5 }
+        "1": { "temp": 0.0, "hr": 2, "rr": 1, "sbp": 0, "dbp": -1, "spo2": 0.0 },
+        "2": { "temp": 0.2, "hr": 5, "rr": 3, "sbp": -1, "dbp": -4, "spo2": 0.0 },
+        "3": { "temp": 0.6, "hr": 9, "rr": 5, "sbp": -3, "dbp": -8, "spo2": -0.5 }
       },
       "timeline": [
         {
           "phase": "j0_reaction_systemique_discrete",
           "duration_minutes": 720,
-          "trend_per_10min": { "temp": 0.01 },
-          "target_shift": { "temp": 0.1, "hr": 2, "rr": 1, "sbp": 0, "dbp": -1, "spo2": 0.0 },
+          "trend_per_10min": { "temp": 0.00 },
+          "target_shift": { "temp": 0.0, "hr": 2, "rr": 1, "sbp": 0, "dbp": -1, "spo2": 0.0 },
           "adaptation_rate": 0.00008
         },
         {
           "phase": "j1_inflammation",
           "duration_minutes": 960,
-          "trend_per_10min": { "temp": 0.02 },
-          "target_shift": { "temp": 0.4, "hr": 4, "rr": 2, "sbp": -1, "dbp": -2, "spo2": 0.0 },
+          "trend_per_10min": { "temp": 0.01 },
+          "target_shift": { "temp": 0.2, "hr": 4, "rr": 2, "sbp": -1, "dbp": -2, "spo2": 0.0 },
           "adaptation_rate": 0.00012
         },
         {
           "phase": "j2_sepsis_suspect",
           "duration_minutes": 960,
-          "trend_per_10min": { "temp": 0.04 },
-          "target_shift": { "temp": 0.8, "hr": 9, "rr": 4, "sbp": -2, "dbp": -6, "spo2": -0.5 },
+          "trend_per_10min": { "temp": 0.03 },
+          "target_shift": { "temp": 0.6, "hr": 9, "rr": 4, "sbp": -2, "dbp": -6, "spo2": -0.5 },
           "adaptation_rate": 0.00018
         },
         {
           "phase": "j3_vasoplegie_bascule",
           "duration_minutes": 1200,
           "trend_per_10min": { "temp": 0.04 },
-          "target_shift": { "temp": 1.1, "hr": 16, "rr": 6, "sbp": -8, "dbp": -12, "spo2": -1.5 },
+          "target_shift": { "temp": 1.0, "hr": 16, "rr": 6, "sbp": -8, "dbp": -12, "spo2": -1.5 },
           "adaptation_rate": 0.00024
         }
       ]
@@ -210,8 +210,8 @@
           "phase": "apres_traitement_soulagement",
           "duration_minutes": 240,
           "trend_per_10min": {},
-          "target_shift": { "hr": 5, "sbp": 4, "dbp": 2, "rr": 1, "temp": 0.0, "spo2": 0.0 },
-          "adaptation_rate": 0.0012
+          "target_shift": { "hr": 2, "sbp": 1, "dbp": 1, "rr": 0, "temp": 0.0, "spo2": 0.0 },
+          "adaptation_rate": 0.0016
         },
         {
           "phase": "midi_reprise_activite",
@@ -238,14 +238,14 @@
           "phase": "progressive_low_output",
           "duration_minutes": 960,
           "trend_per_10min": {},
-          "target_shift": { "hr": 10, "sbp": -8, "dbp": -5, "spo2": -1, "rr": 2, "temp": 0.0 },
+          "target_shift": { "hr": 10, "sbp": -8, "dbp": -5, "spo2": -1, "rr": 1, "temp": 0.0 },
           "adaptation_rate": 0.00045
         },
         {
           "phase": "worsening_cardiac_stress",
           "duration_minutes": 1200,
           "trend_per_10min": {},
-          "target_shift": { "hr": 18, "sbp": -16, "dbp": -10, "spo2": -2, "rr": 3, "temp": 0.0 },
+          "target_shift": { "hr": 18, "sbp": -16, "dbp": -10, "spo2": -2, "rr": 2, "temp": 0.0 },
           "adaptation_rate": 0.00075
         }
       ]
@@ -258,16 +258,16 @@
         {
           "phase": "hemodynamic_instability_onset",
           "duration_minutes": 60,
-          "instant_jump": { "hr": 14, "sbp": -12, "dbp": -8, "spo2": -1, "rr": 2 },
+          "instant_jump": { "hr": 14, "sbp": -12, "dbp": -8, "spo2": -1, "rr": 1 },
           "trend_per_10min": {},
-          "target_shift": { "hr": 24, "sbp": -20, "dbp": -12, "spo2": -3, "rr": 4, "temp": 0.0 },
+          "target_shift": { "hr": 24, "sbp": -20, "dbp": -12, "spo2": -2, "rr": 2, "temp": 0.0 },
           "adaptation_rate": 0.01
         },
         {
           "phase": "low_output_state",
           "duration_minutes": 360,
           "trend_per_10min": {},
-          "target_shift": { "hr": 32, "sbp": -30, "dbp": -18, "spo2": -5, "rr": 6, "temp": 0.0 },
+          "target_shift": { "hr": 32, "sbp": -30, "dbp": -18, "spo2": -3, "rr": 3, "temp": 0.0 },
           "adaptation_rate": 0.0035
         }
       ]

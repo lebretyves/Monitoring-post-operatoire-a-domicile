@@ -28,7 +28,7 @@ export interface NotificationRecord {
 }
 
 export interface LiveEvent {
-  type: "vitals" | "alert" | "ack" | "notification" | "notification_read";
+  type: "vitals" | "alert" | "ack" | "notification" | "notification_read" | "notifications_reset";
   patient_id: string;
   payload: any;
 }

@@ -34,6 +34,7 @@ export function NotificationCenter({
         boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)",
         display: "grid",
         gap: 14,
+        maxHeight: "min(78vh, 680px)",
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -65,7 +66,7 @@ export function NotificationCenter({
       {notifications.length === 0 ? (
         <div style={{ color: "#64748b", fontSize: 14 }}>Aucune notification generee pour le moment.</div>
       ) : (
-        <div style={{ display: "grid", gap: 10, maxHeight: compact ? 320 : 420, overflowY: "auto", paddingRight: 4 }}>
+        <div style={{ display: "grid", gap: 10, maxHeight: compact ? 320 : 520, overflowY: "auto", paddingRight: 4 }}>
           {notifications.map((notification) => (
             <article
               key={notification.id}
@@ -79,15 +80,32 @@ export function NotificationCenter({
                 gap: 8,
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                <div style={{ fontWeight: 800, color: "#0f172a" }}>{notification.title}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    borderRadius: 999,
+                    background: "#0f172a",
+                    color: "#f8fafc",
+                    fontSize: 13,
+                    fontWeight: 900,
+                    letterSpacing: 0.4,
+                    padding: "6px 12px",
+                  }}
+                >
+                  Patient {notification.patient_id}
+                </div>
                 <div style={{ color: levelAccent(notification.level), fontWeight: 800, fontSize: 13 }}>
                   {notification.level}
                 </div>
               </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 800, color: "#0f172a" }}>{notification.title}</div>
+              </div>
               <div style={{ color: "#334155", fontSize: 14 }}>{notification.message}</div>
               <div style={{ color: "#64748b", fontSize: 13 }}>
-                {notification.patient_id} - {formatNotificationDate(notification.created_at)}
+                {formatNotificationDate(notification.created_at)}
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <span style={notification.status === "UNREAD" ? unreadBadge : readBadge}>
