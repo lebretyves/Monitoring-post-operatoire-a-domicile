@@ -25,6 +25,12 @@ interface PatientMonitorStripProps {
   phaseSeconds?: number;
 }
 
+interface MetricState {
+  meta: { label: string; unit: string; color: string; step: number; describe: (vitals: VitalPayload) => string };
+  limits: AlarmLimitSet;
+  outOfRange: boolean;
+}
+
 const MONITOR_COLORS = {
   hr: "#2dd36f",
   spo2: "#3ea7ff",
@@ -112,6 +118,16 @@ export function PatientMonitorStrip({
 
   const sweepProgress = ((phaseMs / 1000) % SWEEP_SECONDS) / SWEEP_SECONDS;
   const monitorSignals = useMemo(() => buildMonitorSignals(patient.id, vitals, phaseMs / 1000), [patient.id, vitals, phaseMs]);
+  const metricStates = (Object.keys(METRIC_META) as AlarmMetricId[]).reduce((acc, metricId) => {
+    const limitsForMetric = limits[metricId] ?? DEFAULT_LIMITS[metricId];
+    const value = metricId === "sbp" ? vitals?.sbp ?? 0 : vitals?.[metricId] ?? 0;
+    acc[metricId] = {
+      meta: METRIC_META[metricId],
+      limits: limitsForMetric,
+      outOfRange: value < limitsForMetric.low || value > limitsForMetric.high,
+    };
+    return acc;
+  }, {} as Record<AlarmMetricId, MetricState>);
 
   if (!vitals) {
     return (
@@ -141,6 +157,72 @@ export function PatientMonitorStrip({
       </article>
     );
   }
+
+  const rightRailReadouts = [
+    {
+      key: "hr",
+      label: "FC",
+      value: `${Math.round(vitals.hr)}`,
+      unit: "bpm",
+      detail: formatLimitSummary(metricStates.hr.limits),
+      color: MONITOR_COLORS.hr,
+      metricId: "hr" as AlarmMetricId,
+      alert: metricStates.hr.outOfRange,
+    },
+    {
+      key: "spo2",
+      label: "SpO2",
+      value: `${Math.round(vitals.spo2)}`,
+      unit: "%",
+      detail: formatLimitSummary(metricStates.spo2.limits),
+      color: MONITOR_COLORS.spo2,
+      metricId: "spo2" as AlarmMetricId,
+      alert: metricStates.spo2.outOfRange,
+    },
+    {
+      key: "rr",
+      label: "FR",
+      value: `${Math.round(vitals.rr)}`,
+      unit: "/min",
+      detail: formatLimitSummary(metricStates.rr.limits),
+      color: MONITOR_COLORS.rr,
+      metricId: "rr" as AlarmMetricId,
+      alert: metricStates.rr.outOfRange,
+    },
+    {
+      key: "sbp",
+      label: "PAS",
+      value: `${Math.round(vitals.sbp)}`,
+      unit: "mmHg",
+      detail: `PAD ${Math.round(vitals.dbp)}  TAM ${Math.round(vitals.map)}`,
+      color: MONITOR_COLORS.sbp,
+      metricId: "sbp" as AlarmMetricId,
+      alert: metricStates.sbp.outOfRange,
+    },
+    {
+      key: "temp",
+      label: "TEMP",
+      value: `${vitals.temp.toFixed(1)}`,
+      unit: "C",
+      detail: formatLimitSummary(metricStates.temp.limits),
+      color: MONITOR_COLORS.temp,
+      metricId: "temp" as AlarmMetricId,
+      alert: metricStates.temp.outOfRange,
+    },
+  ];
+
+  const footerReadouts = [
+    { key: "hr", label: "FC", value: `${Math.round(vitals.hr)}`, color: MONITOR_COLORS.hr, metricId: "hr" as AlarmMetricId, alert: metricStates.hr.outOfRange },
+    { key: "spo2", label: "SpO2", value: `${Math.round(vitals.spo2)}%`, color: MONITOR_COLORS.spo2, metricId: "spo2" as AlarmMetricId, alert: metricStates.spo2.outOfRange },
+    { key: "sbp", label: "PAS", value: `${Math.round(vitals.sbp)}`, color: MONITOR_COLORS.sbp, metricId: "sbp" as AlarmMetricId, alert: metricStates.sbp.outOfRange },
+    { key: "dbp", label: "PAD", value: `${Math.round(vitals.dbp)}`, color: "#ff9b9f" },
+    { key: "map", label: "TAM", value: `${Math.round(vitals.map)}`, color: "#ffc2c4" },
+    { key: "rr", label: "FR", value: `${Math.round(vitals.rr)}`, color: MONITOR_COLORS.rr, metricId: "rr" as AlarmMetricId, alert: metricStates.rr.outOfRange },
+    { key: "temp", label: "TEMP", value: `${vitals.temp.toFixed(1)}`, color: MONITOR_COLORS.temp, metricId: "temp" as AlarmMetricId, alert: metricStates.temp.outOfRange },
+    { key: "shock", label: "I CHOC", value: `${(vitals.shock_index ?? vitals.hr / Math.max(vitals.sbp, 1)).toFixed(2)}`, color: "#dbe8f5" },
+    { key: "battery", label: "BATT", value: `${Math.round(vitals.battery)}%`, color: "#dbe8f5" },
+    { key: "time", label: "HEURE", value: formatMonitorTime(vitals.ts), color: "#dbe8f5" },
+  ];
 
   return (
     <article
@@ -185,7 +267,7 @@ export function PatientMonitorStrip({
         <div
           style={{
             display: "grid",
-            gap: 8,
+            gap: 10,
             borderRadius: 16,
             background: "linear-gradient(180deg, rgba(8, 20, 32, 0.96), rgba(4, 10, 18, 0.96))",
             border: "1px solid rgba(71, 111, 160, 0.18)",
@@ -193,206 +275,163 @@ export function PatientMonitorStrip({
             boxShadow: "inset 0 0 0 1px rgba(148, 184, 224, 0.04)",
           }}
         >
-          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 8 }}>
-            <div style={{ color: "#9fb9d7", fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase", fontWeight: 800 }}>
-              Mini scope numerique
-            </div>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 90px", gap: 10 }}>
             <div
               style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "3px 7px",
-                borderRadius: 999,
-                background: "rgba(15, 23, 42, 0.82)",
-                border: "1px solid rgba(71, 111, 160, 0.18)",
-                color: "#c7d6e7",
-                fontSize: 10,
-                fontWeight: 700,
+                borderRadius: 14,
+                background: "rgba(7, 18, 30, 0.78)",
+                border: "1px solid rgba(71, 111, 160, 0.16)",
+                padding: "10px 11px",
+                display: "grid",
+                gap: 8,
+                alignContent: "start",
               }}
             >
-              <span
-                style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: 999,
-                  background: "#22c55e",
-                  boxShadow: "0 0 10px rgba(34, 197, 94, 0.7)",
-                }}
-              />
-              LIVE
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gap: 6 }}>
-            {(Object.keys(METRIC_META) as AlarmMetricId[]).map((metricId) => {
-              const meta = METRIC_META[metricId];
-              const metricLimits = limits[metricId] ?? DEFAULT_LIMITS[metricId];
-              const value = metricId === "sbp" ? vitals.sbp : vitals[metricId];
-              const outOfRange = value < metricLimits.low || value > metricLimits.high;
-              return (
-                <button
-                  key={metricId}
-                  type="button"
-                  onClick={() => setActiveMetric((current) => (current === metricId ? null : metricId))}
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                <div style={{ color: "#9fb9d7", fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase", fontWeight: 800 }}>
+                  Scope numerique
+                </div>
+                <div
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: "44px minmax(0, 1fr)",
-                    gap: 8,
-                    alignItems: "baseline",
-                    textAlign: "left",
-                    borderRadius: 12,
-                    border: `1px solid ${outOfRange ? meta.color : "rgba(159, 185, 215, 0.14)"}`,
-                    background: outOfRange ? "rgba(168, 26, 42, 0.16)" : "rgba(9, 19, 31, 0.82)",
-                    color: "#eff7ff",
-                    padding: "8px 9px",
-                    cursor: "pointer",
-                    boxShadow: activeMetric === metricId ? `0 0 0 1px ${meta.color}` : "none",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "3px 7px",
+                    borderRadius: 999,
+                    background: "rgba(15, 23, 42, 0.82)",
+                    border: "1px solid rgba(71, 111, 160, 0.18)",
+                    color: "#c7d6e7",
+                    fontSize: 10,
+                    fontWeight: 700,
                   }}
                 >
-                  <div style={{ display: "grid", gap: 2 }}>
-                    <span style={{ color: meta.color, fontWeight: 900, fontSize: 11, letterSpacing: 0.7 }}>{meta.label}</span>
-                    <span style={{ color: "#5f7d9c", fontSize: 9, fontWeight: 700 }}>{meta.unit}</span>
-                  </div>
-                  <div style={{ display: "grid", gap: 2 }}>
-                    <span
-                      style={{
-                        color: meta.color,
-                        fontWeight: 900,
-                        fontSize: metricId === "sbp" ? 15 : 22,
-                        lineHeight: 1,
-                        fontVariantNumeric: "tabular-nums",
-                        textShadow: "0 0 12px rgba(255,255,255,0.08)",
-                      }}
-                    >
-                      {meta.describe(vitals)}
-                    </span>
-                    <span style={{ color: outOfRange ? meta.color : "#6f8ba8", fontSize: 9, fontWeight: 700 }}>
-                      {formatLimitSummary(metricLimits)}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
+                  <span
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: 999,
+                      background: "#22c55e",
+                      boxShadow: "0 0 10px rgba(34, 197, 94, 0.7)",
+                    }}
+                  />
+                  LIVE
+                </div>
+              </div>
+              <div style={{ color: "#d8e8f7", fontSize: 12, fontWeight: 700 }}>{patient.surgery_type}</div>
+              <div style={{ color: "#88a7c4", fontSize: 11 }}>{truncateLabel(vitals.scenario_label ?? vitals.scenario, 48)}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
+                <div style={miniStatStyle}>
+                  <span style={miniStatLabelStyle}>PAS/PAD</span>
+                  <strong style={miniStatValueStyle}>{Math.round(vitals.sbp)}/{Math.round(vitals.dbp)}</strong>
+                </div>
+                <div style={miniStatStyle}>
+                  <span style={miniStatLabelStyle}>TAM</span>
+                  <strong style={miniStatValueStyle}>{Math.round(vitals.map)}</strong>
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "grid", gap: 7 }}>
+              {rightRailReadouts.map((readout) => (
+                <MetricRailTile
+                  key={readout.key}
+                  label={readout.label}
+                  value={readout.value}
+                  unit={readout.unit}
+                  detail={readout.detail}
+                  color={readout.color}
+                  compact
+                  active={activeMetric === readout.metricId}
+                  alert={readout.alert}
+                  onClick={() => setActiveMetric((current) => (current === readout.metricId ? null : readout.metricId))}
+                />
+              ))}
+            </div>
           </div>
 
-          {showDetailLink ? (
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <Link
-                to={`/patients/${patient.id}`}
-                style={{
-                  textDecoration: "none",
-                  color: "#04121e",
-                  background: "#d4efff",
-                  padding: "8px 10px",
-                  borderRadius: 10,
-                  fontWeight: 800,
-                  fontSize: 11,
-                }}
-              >
-                Voir fiche
-              </Link>
-            </div>
-          ) : null}
+          <MonitorFooterStrip
+            items={footerReadouts}
+            compact
+            activeMetric={activeMetric}
+            onSelectMetric={(metricId) => setActiveMetric((current) => (current === metricId ? null : metricId))}
+          />
+
+          {showDetailLink ? <div style={{ display: "flex", justifyContent: "flex-end" }}><Link to={`/patients/${patient.id}`} style={{ ...detailLinkStyle, padding: "8px 10px", borderRadius: 10, fontSize: 11 }}>Voir fiche</Link></div> : null}
         </div>
       ) : (
         <>
           <div
             style={{
               display: "grid",
-              gridTemplateRows: compact ? "repeat(4, minmax(42px, 1fr))" : "repeat(4, minmax(54px, 1fr))",
-              gap: compact ? 6 : 8,
-              background: "rgba(7, 18, 30, 0.58)",
-              borderRadius: compact ? 16 : 20,
-              padding: compact ? 10 : 12,
-              border: "1px solid rgba(71, 111, 160, 0.18)"
+              gridTemplateColumns: compact ? "minmax(0, 1fr) 116px" : "minmax(0, 1fr) 152px",
+              gap: compact ? 8 : 12,
+              alignItems: "stretch",
             }}
           >
-            <WaveRow
-              label="ECG"
-              color={MONITOR_COLORS.hr}
-              signal={monitorSignals.ecg}
-              sweepProgress={sweepProgress}
-              metricValue={`${Math.round(vitals.hr)} bpm`}
-              compact={compact}
-            />
-            <WaveRow
-              label="TA"
-              color={MONITOR_COLORS.sbp}
-              signal={monitorSignals.art}
-              sweepProgress={sweepProgress}
-              metricValue={`${Math.round(vitals.sbp)}/${Math.round(vitals.dbp)}  TAM ${Math.round(vitals.map)}`}
-              compact={compact}
-            />
-            <WaveRow
-              label="SpO2"
-              color={MONITOR_COLORS.spo2}
-              signal={monitorSignals.pleth}
-              sweepProgress={sweepProgress}
-              metricValue={`${Math.round(vitals.spo2)}%`}
-              compact={compact}
-            />
-            <WaveRow
-              label="FR"
-              color={MONITOR_COLORS.rr}
-              signal={monitorSignals.resp}
-              sweepProgress={sweepProgress}
-              metricValue={`${Math.round(vitals.rr)}/min`}
-              compact={compact}
-            />
+            <div
+              style={{
+                display: "grid",
+                gridTemplateRows: compact ? "repeat(4, minmax(42px, 1fr))" : "repeat(4, minmax(54px, 1fr))",
+                gap: compact ? 6 : 8,
+                background: "rgba(7, 18, 30, 0.58)",
+                borderRadius: compact ? 16 : 20,
+                padding: compact ? 10 : 12,
+                border: "1px solid rgba(71, 111, 160, 0.18)"
+              }}
+            >
+              <WaveRow
+                label="ECG"
+                color={MONITOR_COLORS.hr}
+                signal={monitorSignals.ecg}
+                sweepProgress={sweepProgress}
+                compact={compact}
+              />
+              <WaveRow
+                label="TA"
+                color={MONITOR_COLORS.sbp}
+                signal={monitorSignals.art}
+                sweepProgress={sweepProgress}
+                compact={compact}
+              />
+              <WaveRow
+                label="SpO2"
+                color={MONITOR_COLORS.spo2}
+                signal={monitorSignals.pleth}
+                sweepProgress={sweepProgress}
+                compact={compact}
+              />
+              <WaveRow
+                label="FR"
+                color={MONITOR_COLORS.rr}
+                signal={monitorSignals.resp}
+                sweepProgress={sweepProgress}
+                compact={compact}
+              />
+            </div>
+
+            <div style={{ display: "grid", gap: compact ? 7 : 8 }}>
+              {rightRailReadouts.map((readout) => (
+                <MetricRailTile
+                  key={readout.key}
+                  label={readout.label}
+                  value={readout.value}
+                  unit={readout.unit}
+                  detail={readout.detail}
+                  color={readout.color}
+                  compact={compact}
+                  active={activeMetric === readout.metricId}
+                  alert={readout.alert}
+                  onClick={() => setActiveMetric((current) => (current === readout.metricId ? null : readout.metricId))}
+                />
+              ))}
+            </div>
           </div>
 
-          <div
-            style={{
-              marginTop: 12,
-              display: "grid",
-              gridTemplateColumns: compact
-                ? "repeat(auto-fit, minmax(130px, 1fr))"
-                : "repeat(auto-fit, minmax(150px, 1fr))",
-              gap: 10,
-            }}
-          >
-            {(Object.keys(METRIC_META) as AlarmMetricId[]).map((metricId) => {
-              const meta = METRIC_META[metricId];
-              const metricLimits = limits[metricId] ?? DEFAULT_LIMITS[metricId];
-              const value = metricId === "sbp" ? vitals.sbp : vitals[metricId];
-              const outOfRange = value < metricLimits.low || value > metricLimits.high;
-              return (
-                <button
-                  key={metricId}
-                  type="button"
-                  onClick={() => setActiveMetric((current) => (current === metricId ? null : metricId))}
-                  style={{
-                    textAlign: "left",
-                    borderRadius: 18,
-                    border: `1px solid ${outOfRange ? meta.color : "rgba(159, 185, 215, 0.18)"}`,
-                    background: outOfRange ? "rgba(168, 26, 42, 0.18)" : "rgba(13, 29, 47, 0.92)",
-                    color: "#eff7ff",
-                    padding: "12px 14px",
-                    cursor: "pointer",
-                    boxShadow: activeMetric === metricId ? `0 0 0 1px ${meta.color}` : "none",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                    <span style={{ color: meta.color, fontWeight: 800, fontSize: 13 }}>{meta.label}</span>
-                    <span style={{ color: outOfRange ? meta.color : "#6f8ba8", fontSize: 11 }}>
-                      {formatLimitSummary(metricLimits)}
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      marginTop: 6,
-                      fontWeight: 800,
-                      fontSize: metricId === "sbp" ? 18 : 24,
-                      lineHeight: 1.1
-                    }}
-                  >
-                    {meta.describe(vitals)}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+          <MonitorFooterStrip
+            items={footerReadouts}
+            compact={compact}
+            activeMetric={activeMetric}
+            onSelectMetric={(metricId) => setActiveMetric((current) => (current === metricId ? null : metricId))}
+          />
         </>
       )}
 
@@ -457,14 +496,12 @@ function WaveRow({
   color,
   signal,
   sweepProgress,
-  metricValue,
   compact = false,
 }: {
   label: string;
   color: string;
   signal: SignalDefinition;
   sweepProgress: number;
-  metricValue: string;
   compact?: boolean;
 }) {
   const cursorX = Math.max(8, Math.min(signal.width - 8, sweepProgress * signal.width));
@@ -474,13 +511,16 @@ function WaveRow({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: compact ? "62px minmax(0, 1fr) 92px" : "84px minmax(0, 1fr) 118px",
+        gridTemplateColumns: compact ? "44px minmax(0, 1fr)" : "58px minmax(0, 1fr)",
         gap: compact ? 8 : 10,
         alignItems: "center",
         minHeight: compact ? 42 : 54,
       }}
     >
-      <div style={{ color, fontWeight: 800, letterSpacing: 1, fontSize: compact ? 11 : 13 }}>{label}</div>
+      <div style={{ display: "grid", gap: 2, alignContent: "center" }}>
+        <div style={{ color, fontWeight: 800, letterSpacing: 1, fontSize: compact ? 10 : 12 }}>{label}</div>
+        {!compact ? <div style={{ color: "rgba(159, 185, 215, 0.7)", fontSize: 9, letterSpacing: 0.8 }}>LIVE</div> : null}
+      </div>
       <div style={{ position: "relative", height: compact ? 42 : 54, borderRadius: 12, overflow: "hidden", background: "rgba(2, 9, 16, 0.42)" }}>
         <svg viewBox={`0 0 ${signal.width} ${signal.height}`} preserveAspectRatio="none" width="100%" height="100%">
           <defs>
@@ -510,7 +550,139 @@ function WaveRow({
           <circle cx={cursorX} cy={markerPoint.y} r="2.8" fill={color} filter={`url(#${signal.id}-glow)`} />
         </svg>
       </div>
-      <div style={{ color, fontWeight: 800, fontSize: compact ? 12 : 14, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{metricValue}</div>
+    </div>
+  );
+}
+
+function MetricRailTile({
+  label,
+  value,
+  unit,
+  detail,
+  color,
+  compact = false,
+  active = false,
+  alert = false,
+  onClick,
+}: {
+  label: string;
+  value: string;
+  unit: string;
+  detail: string;
+  color: string;
+  compact?: boolean;
+  active?: boolean;
+  alert?: boolean;
+  onClick?: () => void;
+}) {
+  const railStyle: CSSProperties = {
+    width: "100%",
+    textAlign: "right",
+    borderRadius: compact ? 14 : 16,
+    border: `1px solid ${alert || active ? color : "rgba(159, 185, 215, 0.16)"}`,
+    background: alert ? "rgba(119, 24, 39, 0.28)" : "rgba(7, 18, 30, 0.88)",
+    color: "#eff7ff",
+    padding: compact ? "8px 10px" : "10px 12px",
+    display: "grid",
+    gap: compact ? 2 : 4,
+    alignContent: "center",
+    boxShadow: active ? `0 0 0 1px ${color}` : "none",
+    cursor: onClick ? "pointer" : "default",
+  };
+
+  const content = (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
+        <span style={{ color, fontSize: compact ? 10 : 11, fontWeight: 900, letterSpacing: 0.9 }}>{label}</span>
+        <span style={{ color: "rgba(207, 224, 240, 0.72)", fontSize: compact ? 9 : 10, fontWeight: 700 }}>{unit}</span>
+      </div>
+      <div
+        style={{
+          color,
+          fontWeight: 900,
+          fontSize: compact ? 26 : label === "PAS" ? 30 : 34,
+          lineHeight: 0.95,
+          fontVariantNumeric: "tabular-nums",
+          textShadow: `0 0 16px ${hexToRgba(color, 0.3)}`,
+        }}
+      >
+        {value}
+      </div>
+      <div style={{ color: alert ? color : "#85a3bf", fontSize: compact ? 8 : 9, fontWeight: 700 }}>{detail}</div>
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} style={railStyle}>
+        {content}
+      </button>
+    );
+  }
+
+  return <div style={railStyle}>{content}</div>;
+}
+
+function MonitorFooterStrip({
+  items,
+  compact = false,
+  activeMetric,
+  onSelectMetric,
+}: {
+  items: Array<{ key: string; label: string; value: string; color: string; metricId?: AlarmMetricId; alert?: boolean }>;
+  compact?: boolean;
+  activeMetric: AlarmMetricId | null;
+  onSelectMetric: (metricId: AlarmMetricId) => void;
+}) {
+  return (
+    <div
+      style={{
+        marginTop: 12,
+        display: "grid",
+        gridTemplateColumns: compact
+          ? "repeat(auto-fit, minmax(82px, 1fr))"
+          : "repeat(auto-fit, minmax(94px, 1fr))",
+        gap: 8,
+      }}
+    >
+      {items.map((item) => {
+        const tileStyle: CSSProperties = {
+          width: "100%",
+          textAlign: "left",
+          borderRadius: 12,
+          border: `1px solid ${item.alert || activeMetric === item.metricId ? item.color : "rgba(159, 185, 215, 0.14)"}`,
+          background: item.alert ? "rgba(119, 24, 39, 0.22)" : "rgba(8, 19, 31, 0.92)",
+          color: "#eff7ff",
+          padding: compact ? "8px 9px" : "9px 10px",
+          display: "grid",
+          gap: 4,
+          boxShadow: activeMetric === item.metricId ? `0 0 0 1px ${item.color}` : "none",
+          cursor: item.metricId ? "pointer" : "default",
+        };
+
+        const content = (
+          <>
+            <div style={{ color: item.color, fontSize: compact ? 9 : 10, fontWeight: 800, letterSpacing: 0.8 }}>{item.label}</div>
+            <div style={{ fontWeight: 900, fontSize: compact ? 16 : 18, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
+              {item.value}
+            </div>
+          </>
+        );
+
+        if (item.metricId) {
+          return (
+            <button key={item.key} type="button" onClick={() => onSelectMetric(item.metricId as AlarmMetricId)} style={tileStyle}>
+              {content}
+            </button>
+          );
+        }
+
+        return (
+          <div key={item.key} style={tileStyle}>
+            {content}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -836,6 +1008,17 @@ function truncateLabel(value: string, limit: number): string {
   return `${value.slice(0, Math.max(0, limit - 1))}…`;
 }
 
+function formatMonitorTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "--:--";
+  }
+  return date.toLocaleTimeString("fr-FR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function formatAlarmNumber(value: number): string {
   return Number.isInteger(value) ? `${value}` : value.toFixed(1);
 }
@@ -848,6 +1031,20 @@ function normalizeLimits(value: AlarmLimitSet, fallback: AlarmLimitSet): AlarmLi
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const normalized = hex.replace("#", "");
+  const value = normalized.length === 3
+    ? normalized
+        .split("")
+        .map((char) => `${char}${char}`)
+        .join("")
+    : normalized;
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
 const detailLinkStyle: CSSProperties = {
@@ -867,6 +1064,30 @@ const pillStyle: CSSProperties = {
   color: "#d4e8ff",
   fontSize: 12,
   fontWeight: 700,
+};
+
+const miniStatStyle: CSSProperties = {
+  padding: "8px 9px",
+  borderRadius: 12,
+  border: "1px solid rgba(159, 185, 215, 0.14)",
+  background: "rgba(9, 19, 31, 0.82)",
+  display: "grid",
+  gap: 4,
+};
+
+const miniStatLabelStyle: CSSProperties = {
+  color: "#7f9ab7",
+  fontSize: 9,
+  fontWeight: 800,
+  letterSpacing: 0.8,
+};
+
+const miniStatValueStyle: CSSProperties = {
+  color: "#eff7ff",
+  fontSize: 15,
+  fontWeight: 900,
+  lineHeight: 1,
+  fontVariantNumeric: "tabular-nums",
 };
 
 const ghostButtonStyle: CSSProperties = {

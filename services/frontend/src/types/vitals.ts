@@ -50,7 +50,6 @@ export interface TrendResponse {
 export interface ClinicalContextSelection {
   patient_factors: string[];
   perioperative_context: string[];
-  complications_to_discuss: string[];
   free_text: string;
   questionnaire?: QuestionnaireSubmission;
 }
@@ -101,19 +100,49 @@ export interface SummaryResponse {
   llm_status?: "ollama" | "rule-based" | "llm-unavailable" | "disabled";
   summary: string;
   clinical_context?: ClinicalContextSelection;
+  analysis_state?: AnalysisStateSnapshot;
 }
 
 export interface ClinicalHypothesisRow {
   label: string;
   compatibility: "high" | "medium" | "low";
+  compatibility_percent: number;
   arguments_for: string[];
   arguments_against: string[];
+}
+
+export interface ExplanatoryScore {
+  score: number;
+  level: "low" | "medium" | "high" | "critical";
+  reasons: string[];
+}
+
+export interface AnalysisStateSnapshot {
+  mode: "active" | "resting" | "stale";
+  cache_status: "fresh" | "cached" | "stale";
+  generated_at?: string | null;
+  submitted_at?: string | null;
+  delta_signals: string[];
+  trigger_reason?: string;
+  anchor_vitals?: {
+    ts?: string;
+    hr: number;
+    spo2: number;
+    map: number;
+    rr: number;
+    temp: number;
+    shock_index?: number;
+  } | null;
 }
 
 export interface ClinicalPackageResponse {
   source: "ollama" | "rule-based";
   llm_status?: "ollama" | "rule-based" | "llm-unavailable" | "disabled";
   patient_id: string;
+  summary_text: string;
+  explanatory_score: ExplanatoryScore;
+  analysis_state: AnalysisStateSnapshot;
+  questionnaire_state?: QuestionnaireSubmission | null;
   structured_synthesis: string;
   alert_explanations: string[];
   hypothesis_ranking: ClinicalHypothesisRow[];

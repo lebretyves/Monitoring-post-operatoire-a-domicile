@@ -220,14 +220,12 @@ def _format_clinical_context(clinical_context: dict[str, Any] | None) -> str:
 
     patient_factors = clinical_context.get("patient_factors") or []
     perioperative_context = clinical_context.get("perioperative_context") or []
-    complications = clinical_context.get("complications_to_discuss") or []
     free_text = str(clinical_context.get("free_text") or "").strip()
 
     lines = [
         "Contexte clinique declaratif (facteur de risque, pas preuve):",
         f"- Terrain patient: {', '.join(patient_factors) if patient_factors else 'aucun'}",
         f"- Contexte peri-op: {', '.join(perioperative_context) if perioperative_context else 'aucun'}",
-        f"- Complications a discuter: {', '.join(complications) if complications else 'aucune'}",
     ]
     if free_text:
         lines.append(f"- Commentaire libre: {free_text}")
@@ -235,7 +233,44 @@ def _format_clinical_context(clinical_context: dict[str, Any] | None) -> str:
     answered = questionnaire.get("answered_items") or []
     if answered:
         lines.append(f"- Reponses questionnaire: {'; '.join(answered[:6])}")
+    lines.extend(_format_questionnaire_hints(questionnaire))
     return "\n".join(lines)
+
+
+def _format_questionnaire_hints(questionnaire: dict[str, Any]) -> list[str]:
+    hints = questionnaire.get("differential_hints") or []
+    if not isinstance(hints, list) or not hints:
+        return []
+
+    grouped: dict[tuple[str, bool], list[tuple[int, str]]] = {}
+    for hint in hints:
+        if not isinstance(hint, dict):
+            continue
+        label = str(hint.get("label") or "").strip()
+        reason = str(hint.get("reason") or "").strip()
+        if not label or not reason:
+            continue
+        try:
+            weight = int(hint.get("weight", 1))
+        except (TypeError, ValueError):
+            weight = 1
+        key = (label, bool(hint.get("against")))
+        grouped.setdefault(key, []).append((max(1, min(weight, 4)), reason))
+
+    if not grouped:
+        return []
+
+    ordered_groups = sorted(
+        grouped.items(),
+        key=lambda item: sum(weight for weight, _reason in item[1]),
+        reverse=True,
+    )
+    lines: list[str] = []
+    for (label, against), reasons in ordered_groups[:4]:
+        ordered_reasons = [reason for _weight, reason in sorted(reasons, key=lambda row: row[0], reverse=True)]
+        prefix = "Questionnaire contre" if against else "Questionnaire en faveur de"
+        lines.append(f"- {prefix} {label}: {'; '.join(ordered_reasons[:2])}")
+    return lines
 
 
 def _format_knowledge_excerpt(knowledge_excerpt: str | None) -> str:
@@ -340,7 +375,7 @@ def build_clinical_package_prompt(
         "Contraintes:\n"
         "- structured_synthesis: 2 phrases max.\n"
         "- alert_explanations: 3 items max, 1 phrase courte par item.\n"
-        "- hypothesis_ranking: 3 hypotheses max.\n"
+        "- hypothesis_ranking: 3 hypotheses max, avec compatibility_percent entre 0 et 100 si possible.\n"
         "- arguments_for et arguments_against: 2 items max par hypothese.\n"
         "- trajectory_explanation: 1 phrase.\n"
         "- recheck_recommendations: 3 items max.\n"

@@ -1,11 +1,10 @@
 import type { CSSProperties } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import {
   ackAlert,
   analyzeClinicalPackage,
-  analyzeSummary,
   exportCsvUrl,
   exportPdfUrl,
   getAlerts,
@@ -14,7 +13,6 @@ import {
   getHistory,
   getMlPrediction,
   getPatient,
-  getSummary,
   submitMlFeedback,
   trainMlModel
 } from "../api/http";
@@ -28,18 +26,40 @@ import {
   type PatientAlarmLimits,
   loadStoredAlarmLimits,
 } from "../components/PatientMonitorStrip";
-import { ScenarioControls } from "../components/ScenarioControls";
 import { VitalChart } from "../components/VitalChart";
 import type { AlertRecord, LiveEvent } from "../types/alerts";
 import type {
+  ClinicalHypothesisRow,
   ClinicalContextSelection,
   ClinicalPackageResponse,
   MlPredictionResponse,
   PatientSummary,
   QuestionnaireSelectionResponse,
   QuestionnaireSubmission,
-  TrendPoint
+  TrendPoint,
+  VitalPayload
 } from "../types/vitals";
+
+type AnalysisRestMode = "active" | "resting" | "stale";
+
+interface AnalysisRestState {
+  mode: AnalysisRestMode;
+  anchorVitals: RestAnchorVitals | null;
+  deltaSignals: string[];
+  submittedAt: string | null;
+}
+
+type RestAnchorVitals = Pick<VitalPayload, "ts" | "hr" | "spo2" | "map" | "rr" | "temp" | "shock_index">;
+const EMPTY_QUESTIONNAIRE_SELECTION: QuestionnaireSubmission = {
+  responder: "patient",
+  answers: [],
+  comment: "",
+};
+const EMPTY_CLINICAL_CONTEXT: ClinicalContextSelection = {
+  patient_factors: [],
+  perioperative_context: [],
+  free_text: "",
+};
 
 export function PatientDetailPage() {
   const { patientId = "" } = useParams();
@@ -51,6 +71,11 @@ export function PatientDetailPage() {
   const [summaryLlmStatus, setSummaryLlmStatus] = useState("indisponible");
   const [summaryStatus, setSummaryStatus] = useState("idle");
   const [clinicalPackage, setClinicalPackage] = useState<ClinicalPackageResponse | null>(null);
+  const [baselineClinicalPackage, setBaselineClinicalPackage] = useState<ClinicalPackageResponse | null>(null);
+  const [questionnaireComparison, setQuestionnaireComparison] = useState<{
+    before: ClinicalPackageResponse;
+    after: ClinicalPackageResponse;
+  } | null>(null);
   const [clinicalPackageStatus, setClinicalPackageStatus] = useState("idle");
   const [hours, setHours] = useState(0);
   const [wsStatus, setWsStatus] = useState("connecting");
@@ -61,67 +86,172 @@ export function PatientDetailPage() {
   const [mlMessage, setMlMessage] = useState("");
   const [questionnaire, setQuestionnaire] = useState<QuestionnaireSelectionResponse | null>(null);
   const [questionnaireStatus, setQuestionnaireStatus] = useState("idle");
-  const [questionnaireSelection, setQuestionnaireSelection] = useState<QuestionnaireSubmission>({
-    responder: "patient",
-    answers: [],
-    comment: "",
+  const [questionnaireSubmitStatus, setQuestionnaireSubmitStatus] = useState("idle");
+  const [clinicalContextSelection, setClinicalContextSelection] = useState<ClinicalContextSelection>(EMPTY_CLINICAL_CONTEXT);
+  const [questionnaireSelection, setQuestionnaireSelection] = useState<QuestionnaireSubmission>(EMPTY_QUESTIONNAIRE_SELECTION);
+  const [questionnaireCollapsed, setQuestionnaireCollapsed] = useState(false);
+  const [analysisRestState, setAnalysisRestState] = useState<AnalysisRestState>({
+    mode: "active",
+    anchorVitals: null,
+    deltaSignals: [],
+    submittedAt: null,
   });
   const [alarmLimits, setAlarmLimits] = useState<Record<string, PatientAlarmLimits>>(() => loadStoredAlarmLimits());
-  const [clinicalContext, setClinicalContext] = useState<ClinicalContextSelection>({
-    patient_factors: [],
-    perioperative_context: [],
-    complications_to_discuss: [],
-    free_text: "",
-  });
+  const defaultClinicalPackageRequestRef = useRef<Promise<ClinicalPackageResponse> | null>(null);
 
   const vitals = patient?.last_vitals;
   const currentPathology = vitals?.scenario_label ?? vitals?.scenario ?? "";
   const currentSurgeryType = vitals?.surgery_type ?? patient?.surgery_type ?? "";
-  const currentScenario = vitals?.scenario_label ?? vitals?.scenario ?? "Cas clinique non disponible";
+  const currentPostopDay = vitals?.postop_day ?? patient?.postop_day;
   const activeAlerts = alerts.filter((alert) => alert.metric_snapshot.historical_backfill !== true);
   const historicalAlerts = alerts.filter((alert) => alert.metric_snapshot.historical_backfill === true);
+  const questionnaireRestMessage = buildAnalysisRestMessage(analysisRestState);
 
   useEffect(() => {
     window.localStorage.setItem(ALARM_STORAGE_KEY, JSON.stringify(alarmLimits));
   }, [alarmLimits]);
 
+  useEffect(() => {
+    setSummary("Chargement...");
+    setSummarySource("indisponible");
+    setSummaryLlmStatus("indisponible");
+    setClinicalPackage(null);
+    setBaselineClinicalPackage(null);
+    setQuestionnaireComparison(null);
+    setQuestionnaire(null);
+    setQuestionnaireSubmitStatus("idle");
+    setClinicalContextSelection(EMPTY_CLINICAL_CONTEXT);
+    setQuestionnaireSelection(EMPTY_QUESTIONNAIRE_SELECTION);
+    setQuestionnaireCollapsed(false);
+    setAnalysisRestState({
+      mode: "active",
+      anchorVitals: null,
+      deltaSignals: [],
+      submittedAt: null,
+    });
+    defaultClinicalPackageRequestRef.current = null;
+  }, [patientId]);
+
+  function requestDefaultClinicalPackage(targetPatientId: string): Promise<ClinicalPackageResponse> {
+    if (defaultClinicalPackageRequestRef.current) {
+      return defaultClinicalPackageRequestRef.current;
+    }
+    let pendingRequest: Promise<ClinicalPackageResponse>;
+    pendingRequest = getClinicalPackage(targetPatientId).finally(() => {
+      if (defaultClinicalPackageRequestRef.current === pendingRequest) {
+        defaultClinicalPackageRequestRef.current = null;
+      }
+    });
+    defaultClinicalPackageRequestRef.current = pendingRequest;
+    return pendingRequest;
+  }
+
+  async function ensureComparisonBaseline(): Promise<ClinicalPackageResponse | null> {
+    if (baselineClinicalPackage) {
+      return baselineClinicalPackage;
+    }
+    if (clinicalPackage && !clinicalPackage.questionnaire_state) {
+      setBaselineClinicalPackage(clinicalPackage);
+      return clinicalPackage;
+    }
+    if (!patientId) {
+      return null;
+    }
+    const response = await requestDefaultClinicalPackage(patientId);
+    if (!response.questionnaire_state) {
+      setBaselineClinicalPackage(response);
+      return response;
+    }
+    return null;
+  }
+
   function buildAnalysisPayload(): ClinicalContextSelection {
-    const questionnairePayload =
-      questionnaireSelection.answers.length > 0 ||
-      questionnaireSelection.comment.trim() ||
-      questionnaireSelection.responder !== "patient"
-        ? questionnaireSelection
-        : undefined;
+    const questionnairePayload = buildQuestionnairePayload(questionnaireSelection);
     return {
-      ...clinicalContext,
+      patient_factors: [],
+      perioperative_context: [],
+      free_text: "",
       questionnaire: questionnairePayload,
     };
+  }
+
+  function applyClinicalPackageResponse(
+    response: ClinicalPackageResponse,
+    options: {
+      setAsBaseline: boolean;
+      comparisonBefore?: ClinicalPackageResponse | null;
+    },
+  ) {
+    const { setAsBaseline, comparisonBefore } = options;
+    setClinicalPackage(response);
+    if (setAsBaseline) {
+      setBaselineClinicalPackage(response);
+    }
+    setSummary(response.summary_text);
+    setSummarySource(response.source);
+    setSummaryLlmStatus(response.llm_status ?? response.source);
+    setAnalysisRestState({
+      mode: response.analysis_state.mode,
+      anchorVitals: response.analysis_state.anchor_vitals
+        ? {
+            ts: response.analysis_state.anchor_vitals.ts ?? "",
+            hr: response.analysis_state.anchor_vitals.hr,
+            spo2: response.analysis_state.anchor_vitals.spo2,
+            map: response.analysis_state.anchor_vitals.map,
+            rr: response.analysis_state.anchor_vitals.rr,
+            temp: response.analysis_state.anchor_vitals.temp,
+            shock_index: response.analysis_state.anchor_vitals.shock_index ?? 0,
+          }
+        : null,
+      deltaSignals: response.analysis_state.delta_signals ?? [],
+      submittedAt: response.analysis_state.submitted_at ?? response.analysis_state.generated_at ?? null,
+    });
+    setQuestionnaireSelection(response.questionnaire_state ?? EMPTY_QUESTIONNAIRE_SELECTION);
+    setQuestionnaireCollapsed(response.analysis_state.mode !== "active");
+    if (comparisonBefore && response.questionnaire_state) {
+      setQuestionnaireComparison({
+        before: comparisonBefore,
+        after: response,
+      });
+    } else {
+      setQuestionnaireComparison(null);
+    }
+  }
+
+  function handleQuestionnaireChange(next: QuestionnaireSubmission) {
+    setQuestionnaireSelection(next);
+    setAnalysisRestState((current) => {
+      if (current.mode === "active") {
+        return current;
+      }
+      return {
+        ...current,
+        mode: "stale",
+        deltaSignals: dedupeStrings([
+          ...current.deltaSignals,
+          "Reponses questionnaire modifiees depuis la derniere analyse",
+        ]),
+      };
+    });
   }
 
   async function refreshDefaultClinicalPackage() {
     if (!patientId) {
       return;
     }
+    setSummaryStatus("loading");
     setClinicalPackageStatus("loading");
     try {
-      const response = await getClinicalPackage(patientId);
-      setClinicalPackage(response);
+      const response = await requestDefaultClinicalPackage(patientId);
+      applyClinicalPackageResponse(response, { setAsBaseline: true });
     } finally {
+      setSummaryStatus("idle");
       setClinicalPackageStatus("idle");
     }
   }
 
   async function refreshDefaultSummary() {
-    if (!patientId) {
-      return;
-    }
-    setSummaryStatus("loading");
-    try {
-      const response = await getSummary(patientId);
-      setSummary(response.summary);
-    } finally {
-      setSummaryStatus("idle");
-    }
+    await refreshDefaultClinicalPackage();
   }
 
   useEffect(() => {
@@ -171,54 +301,29 @@ export function PatientDetailPage() {
 
   useEffect(() => {
     let mounted = true;
-    const loadSummary = async () => {
-      if (!patientId || !currentPathology || !currentSurgeryType) {
-        return;
-      }
-      setSummaryStatus("loading");
-      try {
-        const response = await getSummary(patientId);
-        if (mounted) {
-          setSummary(response.summary);
-          setSummarySource(response.source);
-          setSummaryLlmStatus(response.llm_status ?? response.source);
-        }
-      } catch (error) {
-        if (mounted) {
-          setSummary("Impossible de charger le resume IA.");
-          setSummarySource("indisponible");
-          setSummaryLlmStatus("indisponible");
-        }
-      } finally {
-        if (mounted) {
-          setSummaryStatus("idle");
-        }
-      }
-    };
-    loadSummary().catch(console.error);
-    return () => {
-      mounted = false;
-    };
-  }, [patientId, currentPathology, currentSurgeryType]);
-
-  useEffect(() => {
-    let mounted = true;
     const loadClinicalPackage = async () => {
       if (!patientId || !currentPathology || !currentSurgeryType) {
         return;
       }
+      setSummaryStatus("loading");
       setClinicalPackageStatus("loading");
       try {
-        const response = await getClinicalPackage(patientId);
+        const response = await requestDefaultClinicalPackage(patientId);
         if (mounted) {
-          setClinicalPackage(response);
+          applyClinicalPackageResponse(response, { setAsBaseline: true });
         }
       } catch (error) {
         if (mounted) {
+          setSummary("Impossible de charger l'analyse clinique.");
+          setSummarySource("indisponible");
+          setSummaryLlmStatus("indisponible");
           setClinicalPackage(null);
+          setBaselineClinicalPackage(null);
+          setQuestionnaireComparison(null);
         }
       } finally {
         if (mounted) {
+          setSummaryStatus("idle");
           setClinicalPackageStatus("idle");
         }
       }
@@ -242,14 +347,10 @@ export function PatientDetailPage() {
           return;
         }
         setQuestionnaire(response);
-        setQuestionnaireSelection({
-          responder: "patient",
-          answers: [],
-          comment: "",
-        });
       } catch (error) {
         if (mounted) {
           setQuestionnaire(null);
+          setQuestionnaireCollapsed(false);
         }
       } finally {
         if (mounted) {
@@ -289,6 +390,20 @@ export function PatientDetailPage() {
             }
           }
         ]);
+        setAnalysisRestState((current) => {
+          if (current.mode !== "resting" || !current.anchorVitals) {
+            return current;
+          }
+          const deltaSignals = detectAnalysisDelta(current.anchorVitals, event.payload);
+          if (deltaSignals.length === 0) {
+            return current;
+          }
+          return {
+            ...current,
+            mode: "stale",
+            deltaSignals,
+          };
+        });
       }
       if (event.type === "alert") {
         const payload = event.payload as AlertRecord;
@@ -296,6 +411,21 @@ export function PatientDetailPage() {
           return;
         }
         setAlerts((current) => [payload, ...current.filter((alert) => alert.id !== payload.id)].slice(0, 20));
+        if (payload.level === "CRITICAL") {
+          setAnalysisRestState((current) => {
+            if (current.mode !== "resting") {
+              return current;
+            }
+            return {
+              ...current,
+              mode: "stale",
+              deltaSignals: dedupeStrings([
+                ...current.deltaSignals,
+                `Nouvelle alerte critique: ${payload.title}`,
+              ]),
+            };
+          });
+        }
       }
       if (event.type === "ack") {
         setAlerts((current) =>
@@ -310,28 +440,27 @@ export function PatientDetailPage() {
     if (!patientId) {
       return;
     }
+    setQuestionnaireSubmitStatus("loading");
     setSummaryStatus("loading");
     setClinicalPackageStatus("loading");
     const analysisPayload = buildAnalysisPayload();
+    const questionnairePayload = analysisPayload.questionnaire;
+    if (!questionnairePayload) {
+      setQuestionnaireComparison(null);
+    }
     try {
-      const [summaryResult, packageResult] = await Promise.allSettled([
-        analyzeSummary(patientId, analysisPayload),
-        analyzeClinicalPackage(patientId, analysisPayload),
-      ]);
-      if (summaryResult.status === "fulfilled") {
-        setSummary(summaryResult.value.summary);
-        setSummarySource(summaryResult.value.source);
-        setSummaryLlmStatus(summaryResult.value.llm_status ?? summaryResult.value.source);
-      }
-      if (packageResult.status === "fulfilled") {
-        setClinicalPackage(packageResult.value);
-      }
-      if (summaryResult.status === "rejected" && packageResult.status === "rejected") {
-        throw summaryResult.reason;
-      }
+      const comparisonBaseline = questionnairePayload
+        ? await ensureComparisonBaseline()
+        : baselineClinicalPackage ?? clinicalPackage;
+      const response = await analyzeClinicalPackage(patientId, analysisPayload);
+      applyClinicalPackageResponse(response, {
+        setAsBaseline: !questionnairePayload,
+        comparisonBefore: questionnairePayload ? comparisonBaseline : null,
+      });
     } catch (error) {
       setSummary(error instanceof Error ? error.message : "Impossible de lancer l'analyse IA contextualisee.");
     } finally {
+      setQuestionnaireSubmitStatus("idle");
       setSummaryStatus("idle");
       setClinicalPackageStatus("idle");
     }
@@ -401,14 +530,38 @@ export function PatientDetailPage() {
 
   return (
     <div style={{ display: "grid", gap: 20 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+          alignItems: "center",
+          padding: "16px 18px",
+          borderRadius: 20,
+          background: "linear-gradient(135deg, rgba(7, 26, 52, 0.86), rgba(14, 65, 105, 0.72))",
+          border: "1px solid rgba(148, 197, 255, 0.24)",
+          boxShadow: "0 18px 40px rgba(2, 12, 27, 0.28)",
+          backdropFilter: "blur(6px)",
+        }}
+      >
         <div>
-          <Link to="/" style={{ color: "#0f766e", textDecoration: "none", fontWeight: 700 }}>
+          <Link to="/" style={{ color: "#a7f3d0", textDecoration: "none", fontWeight: 700 }}>
             Retour liste
           </Link>
-          <h1 style={{ marginBottom: 6 }}>Fiche clinique active</h1>
-          <div style={{ color: "#475569" }}>
-            {currentPathology || "Cas clinique en cours"} - {currentSurgeryType || "chirurgie non renseignee"} - slot {patientId} - WebSocket {wsStatus}
+          <h1
+            style={{
+              marginBottom: 6,
+              marginTop: 8,
+              color: "#f8fafc",
+              textShadow: "0 2px 12px rgba(15, 23, 42, 0.45)",
+            }}
+          >
+            {currentSurgeryType || "chirurgie non renseignee"}
+            {typeof currentPostopDay === "number" ? ` - J+${currentPostopDay}` : ""}
+          </h1>
+          <div style={{ color: "#dbeafe", fontWeight: 500 }}>
+            {currentSurgeryType || "chirurgie non renseignee"} - slot {patientId} - WebSocket {wsStatus}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -439,6 +592,18 @@ export function PatientDetailPage() {
         />
       ) : null}
 
+      <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+        <AlertsPanel
+          title="Alertes actives"
+          alerts={activeAlerts}
+          onAck={async (alertId) => {
+            const updated = await ackAlert(alertId);
+            setAlerts((current) => current.map((alert) => (alert.id === updated.id ? updated : alert)));
+          }}
+        />
+        <AlertsPanel title="Alertes historiques" alerts={historicalAlerts} />
+      </section>
+
       <section style={{ display: "grid", gap: 10 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ fontWeight: 800, color: "#0f172a" }}>Historique des constantes vitales</div>
@@ -460,8 +625,15 @@ export function PatientDetailPage() {
         <VitalChart points={points} rangeHours={hours} />
       </section>
 
-      <section style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(260px, 1fr)", gap: 16 }}>
-        <ScenarioControls scenario={currentScenario} />
+      <ClinicalContextPanel
+        value={clinicalContextSelection}
+        onChange={setClinicalContextSelection}
+        title="Antecedents medicaux chirurgicaux"
+        description="Retrouve ici les selections d'antecedents et facteurs cliniques. Elles sont preparees pour une future exploitation IA de conduite a tenir."
+        showAnalyzeButton={false}
+      />
+
+      <section>
         <div style={{ background: "#ffffff", borderRadius: 18, padding: 16, boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <h3 style={{ marginTop: 0, marginBottom: 0 }}>Resume</h3>
@@ -475,29 +647,21 @@ export function PatientDetailPage() {
             </div>
           </div>
           <p style={{ color: "#334155" }}>{summary}</p>
-          <div style={{ color: "#64748b", fontSize: 14 }}>
-            Antecedents relies au cas: {(patient?.history ?? []).join(", ") || "non documentes"}
-          </div>
         </div>
       </section>
-
-      <ClinicalContextPanel
-        value={clinicalContext}
-        onChange={setClinicalContext}
-        onAnalyze={refreshSummaryWithContext}
-        loading={summaryStatus === "loading" || clinicalPackageStatus === "loading"}
-      />
 
       <DifferentialQuestionnaire
         modules={questionnaire?.modules ?? []}
         triggerSummary={questionnaire?.trigger_summary ?? []}
         value={questionnaireSelection}
-        onChange={setQuestionnaireSelection}
+        onChange={handleQuestionnaireChange}
         onSubmit={refreshSummaryWithContext}
+        collapsed={questionnaireCollapsed}
+        onToggleCollapsed={() => setQuestionnaireCollapsed((current) => !current)}
+        restState={analysisRestState.mode}
+        restMessage={questionnaireRestMessage}
         loading={
-          questionnaireStatus === "loading" ||
-          summaryStatus === "loading" ||
-          clinicalPackageStatus === "loading"
+          questionnaireStatus === "loading" || questionnaireSubmitStatus === "loading"
         }
       />
 
@@ -513,9 +677,29 @@ export function PatientDetailPage() {
             <div style={{ color: "#475569", fontSize: 13, fontWeight: 700 }}>
               Source: {formatLlmStatus(clinicalPackage?.llm_status, clinicalPackage?.source)}
             </div>
-            <button type="button" onClick={() => refreshDefaultClinicalPackage()} style={secondaryButton} disabled={clinicalPackageStatus === "loading"}>
-              {clinicalPackageStatus === "loading" ? "Analyse..." : "Actualiser l'analyse"}
-            </button>
+            {analysisRestState.mode !== "active" ? (
+              <div
+                style={{
+                  borderRadius: 999,
+                  padding: "6px 10px",
+                  background: analysisRestState.mode === "stale" ? "#fee2e2" : "#dcfce7",
+                  color: analysisRestState.mode === "stale" ? "#b91c1c" : "#166534",
+                  fontSize: 12,
+                  fontWeight: 800,
+                }}
+              >
+                {analysisRestState.mode === "stale" ? "Nouvelle derive detectee" : "LLM au repos"}
+              </div>
+            ) : null}
+            {analysisRestState.mode !== "active" ? (
+              <button type="button" onClick={() => refreshSummaryWithContext()} style={darkButton} disabled={clinicalPackageStatus === "loading" || summaryStatus === "loading"}>
+                {clinicalPackageStatus === "loading" || summaryStatus === "loading" ? "Reevaluation..." : "Reevaluation"}
+              </button>
+            ) : (
+              <button type="button" onClick={() => refreshDefaultClinicalPackage()} style={secondaryButton} disabled={clinicalPackageStatus === "loading"}>
+                {clinicalPackageStatus === "loading" ? "Analyse..." : "Actualiser l'analyse"}
+              </button>
+            )}
             <button type="button" onClick={() => refreshDefaultSummary()} style={secondaryButton} disabled={summaryStatus === "loading"}>
               {summaryStatus === "loading" ? "Resume..." : "Actualiser le resume"}
             </button>
@@ -524,6 +708,33 @@ export function PatientDetailPage() {
 
         {clinicalPackage ? (
           <>
+            <div style={{ borderRadius: 14, background: "#f8fafc", padding: 14, border: "1px solid #e2e8f0", display: "grid", gap: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ fontWeight: 700, color: "#0f172a" }}>Score explicatif</div>
+                <div
+                  style={{
+                    borderRadius: 999,
+                    padding: "6px 10px",
+                    background: scoreAccentTint(clinicalPackage.explanatory_score.level),
+                    color: scoreAccentColor(clinicalPackage.explanatory_score.level),
+                    fontWeight: 800,
+                  }}
+                >
+                  {clinicalPackage.explanatory_score.score}/100
+                </div>
+              </div>
+              <div style={{ color: scoreAccentColor(clinicalPackage.explanatory_score.level), fontSize: 14, fontWeight: 700 }}>
+                {formatExplanatoryLevel(clinicalPackage.explanatory_score.level)}
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 18, color: "#334155" }}>
+                {clinicalPackage.explanatory_score.reasons.map((item, index) => (
+                  <li key={`score-${index}-${item}`} style={{ marginBottom: 4 }}>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
             <div style={{ borderRadius: 14, background: "#f8fafc", padding: 14, border: "1px solid #e2e8f0", display: "grid", gap: 8 }}>
               <div style={{ fontWeight: 700, color: "#0f172a" }}>Synthese structuree</div>
               <div style={{ color: "#334155" }}>{clinicalPackage.structured_synthesis}</div>
@@ -551,8 +762,8 @@ export function PatientDetailPage() {
                   <div style={{ color: "#64748b", fontSize: 14 }}>Aucune explication supplementaire disponible.</div>
                 ) : (
                   <ul style={{ margin: 0, paddingLeft: 18, color: "#334155" }}>
-                    {clinicalPackage.alert_explanations.map((item) => (
-                      <li key={item} style={{ marginBottom: 4 }}>
+                    {clinicalPackage.alert_explanations.map((item, index) => (
+                      <li key={`alert-${index}-${item}`} style={{ marginBottom: 4 }}>
                         {item}
                       </li>
                     ))}
@@ -566,8 +777,8 @@ export function PatientDetailPage() {
                   <div style={{ color: "#64748b", fontSize: 14 }}>Pas de recommandation supplementaire.</div>
                 ) : (
                   <ul style={{ margin: 0, paddingLeft: 18, color: "#334155" }}>
-                    {clinicalPackage.recheck_recommendations.map((item) => (
-                      <li key={item} style={{ marginBottom: 4 }}>
+                    {clinicalPackage.recheck_recommendations.map((item, index) => (
+                      <li key={`recheck-${index}-${item}`} style={{ marginBottom: 4 }}>
                         {item}
                       </li>
                     ))}
@@ -585,8 +796,13 @@ export function PatientDetailPage() {
                   <div key={`${row.label}-${row.compatibility}`} style={{ borderRadius: 14, background: "#f8fafc", padding: 14, border: "1px solid #e2e8f0", display: "grid", gap: 8 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                       <div style={{ fontWeight: 700, color: "#0f172a" }}>{row.label}</div>
-                      <div style={{ color: compatibilityColor(row.compatibility), fontWeight: 800 }}>
-                        {formatCompatibility(row.compatibility)}
+                      <div style={{ display: "grid", justifyItems: "end", gap: 2 }}>
+                        <div style={{ color: compatibilityColor(row.compatibility), fontWeight: 800 }}>
+                          {formatCompatibility(row.compatibility)}
+                        </div>
+                        <div style={{ color: "#0f172a", fontSize: 13, fontWeight: 800 }}>
+                          {row.compatibility_percent}%
+                        </div>
                       </div>
                     </div>
                     <div style={{ color: "#334155", fontSize: 14 }}>
@@ -599,6 +815,44 @@ export function PatientDetailPage() {
                 ))
               )}
             </div>
+
+            {questionnaireComparison ? (
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={{ fontWeight: 700, color: "#0f172a" }}>Hypotheses apres questionnaire</div>
+                <div style={{ color: "#64748b", fontSize: 14 }}>
+                  Comparatif avant / apres validation du questionnaire differentiel.
+                </div>
+                {buildHypothesisComparisonRows(
+                  questionnaireComparison.before.hypothesis_ranking,
+                  questionnaireComparison.after.hypothesis_ranking
+                ).map((row) => (
+                  <div key={row.label} style={{ borderRadius: 14, background: "#f8fafc", padding: 14, border: "1px solid #e2e8f0", display: "grid", gap: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      <div style={{ fontWeight: 700, color: "#0f172a" }}>{row.label}</div>
+                      <div style={{ color: comparisonDeltaColor(row.delta), fontWeight: 800 }}>
+                        {formatComparisonDelta(row.delta)}
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+                      <div style={comparisonCell}>
+                        <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>Avant questionnaire</div>
+                        <div style={{ color: "#0f172a", fontSize: 20, fontWeight: 800 }}>{row.beforePercent}%</div>
+                        <div style={{ color: comparisonCompatibilityColor(row.beforeCompatibility, row.beforePercent), fontSize: 13, fontWeight: 700 }}>
+                          {formatComparisonCompatibility(row.beforeCompatibility, row.beforePercent)}
+                        </div>
+                      </div>
+                      <div style={comparisonCell}>
+                        <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>Apres questionnaire</div>
+                        <div style={{ color: "#0f172a", fontSize: 20, fontWeight: 800 }}>{row.afterPercent}%</div>
+                        <div style={{ color: comparisonCompatibilityColor(row.afterCompatibility, row.afterPercent), fontSize: 13, fontWeight: 700 }}>
+                          {formatComparisonCompatibility(row.afterCompatibility, row.afterPercent)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             <div style={{ borderRadius: 14, background: "#f8fafc", padding: 14, border: "1px solid #e2e8f0", display: "grid", gap: 8 }}>
               <div style={{ fontWeight: 700, color: "#0f172a" }}>Resume de transmission</div>
@@ -724,18 +978,6 @@ export function PatientDetailPage() {
         </div>
       </section>
 
-      <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
-        <AlertsPanel
-          title="Alertes actives"
-          alerts={activeAlerts}
-          onAck={async (alertId) => {
-            const updated = await ackAlert(alertId);
-            setAlerts((current) => current.map((alert) => (alert.id === updated.id ? updated : alert)));
-          }}
-        />
-        <AlertsPanel title="Alertes historiques" alerts={historicalAlerts} />
-      </section>
-
     </div>
   );
 }
@@ -786,8 +1028,8 @@ function RiskExplainCard({
         <div style={{ color: "#64748b", fontSize: 14 }}>{emptyMessage}</div>
       ) : (
         <ul style={{ margin: 0, paddingLeft: 18, color: "#334155" }}>
-          {items.slice(0, 6).map((item) => (
-            <li key={item} style={{ marginBottom: 4 }}>
+          {items.slice(0, 6).map((item, index) => (
+            <li key={`risk-${index}-${item}`} style={{ marginBottom: 4 }}>
               {item}
             </li>
           ))}
@@ -795,6 +1037,108 @@ function RiskExplainCard({
       )}
     </div>
   );
+}
+
+function buildQuestionnairePayload(
+  selection: QuestionnaireSubmission
+): QuestionnaireSubmission | undefined {
+  return selection.answers.length > 0 || selection.comment.trim() || selection.responder !== "patient"
+    ? selection
+    : undefined;
+}
+
+function detectAnalysisDelta(anchor: RestAnchorVitals, next: VitalPayload): string[] {
+  const signals: string[] = [];
+  if (Math.abs(next.hr - anchor.hr) >= ANALYSIS_DELTA_TRIGGER.hr) {
+    signals.push(`FC ${formatSignedValue(next.hr - anchor.hr)} bpm`);
+  }
+  if (Math.abs(next.spo2 - anchor.spo2) >= ANALYSIS_DELTA_TRIGGER.spo2) {
+    signals.push(`SpO2 ${formatSignedValue(next.spo2 - anchor.spo2)} pts`);
+  }
+  if (Math.abs(next.map - anchor.map) >= ANALYSIS_DELTA_TRIGGER.map) {
+    signals.push(`TAM ${formatSignedValue(next.map - anchor.map)} mmHg`);
+  }
+  if (Math.abs(next.rr - anchor.rr) >= ANALYSIS_DELTA_TRIGGER.rr) {
+    signals.push(`FR ${formatSignedValue(next.rr - anchor.rr)}/min`);
+  }
+  if (Math.abs(next.temp - anchor.temp) >= ANALYSIS_DELTA_TRIGGER.temp) {
+    signals.push(`T ${formatSignedFloat(next.temp - anchor.temp)} C`);
+  }
+  if (Math.abs((next.shock_index ?? 0) - anchor.shock_index) >= ANALYSIS_DELTA_TRIGGER.shockIndex) {
+    signals.push(`shock index ${formatSignedFloat((next.shock_index ?? 0) - anchor.shock_index)}`);
+  }
+  return signals;
+}
+
+function buildAnalysisRestMessage(state: AnalysisRestState): string {
+  if (state.mode === "resting") {
+    return `Analyse au repos apres questionnaire${state.submittedAt ? ` depuis ${formatSubmittedAt(state.submittedAt)}` : ""}. Nouvelle reevaluation uniquement sur action manuelle.`;
+  }
+  if (state.mode === "stale") {
+    const details = state.deltaSignals.join(" ; ") || "delta trigger backend franchi";
+    return `Nouvelle derive clinique depuis la derniere analyse: ${details}. Reevaluation conseillee.`;
+  }
+  return "";
+}
+
+function buildHypothesisComparisonRows(
+  beforeRows: ClinicalHypothesisRow[],
+  afterRows: ClinicalHypothesisRow[]
+): Array<{
+  label: string;
+  beforePercent: number;
+  afterPercent: number;
+  delta: number;
+  beforeCompatibility: "high" | "medium" | "low";
+  afterCompatibility: "high" | "medium" | "low";
+}> {
+  const beforeIndex = new Map(beforeRows.map((row) => [row.label, row]));
+  const afterIndex = new Map(afterRows.map((row) => [row.label, row]));
+  const labels = Array.from(new Set([...beforeIndex.keys(), ...afterIndex.keys()]));
+
+  return labels
+    .map((label) => {
+      const before = beforeIndex.get(label);
+      const after = afterIndex.get(label);
+      return {
+        label,
+        beforePercent: before?.compatibility_percent ?? 0,
+        afterPercent: after?.compatibility_percent ?? 0,
+        delta: (after?.compatibility_percent ?? 0) - (before?.compatibility_percent ?? 0),
+        beforeCompatibility: before?.compatibility ?? "low",
+        afterCompatibility: after?.compatibility ?? "low",
+      };
+    })
+    .sort((left, right) => {
+      if (right.afterPercent !== left.afterPercent) {
+        return right.afterPercent - left.afterPercent;
+      }
+      return right.beforePercent - left.beforePercent;
+    });
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function formatSignedValue(value: number): string {
+  return `${value >= 0 ? "+" : ""}${Math.round(value)}`;
+}
+
+function formatSignedFloat(value: number): string {
+  const rounded = Math.round(value * 100) / 100;
+  return `${rounded >= 0 ? "+" : ""}${rounded.toFixed(2)}`;
+}
+
+function formatSubmittedAt(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "tout a l'heure";
+  }
+  return parsed.toLocaleTimeString("fr-FR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function matchesClinicalContext(alert: AlertRecord, pathology: string, surgeryType: string): boolean {
@@ -836,18 +1180,60 @@ function formatRiskLevel(level?: string): string {
 
 function scoreAccentColor(level?: string): string {
   switch (level) {
+    case "critical":
     case "critique":
     case "seuil_critique_franchi":
     case "tres_eleve":
       return "#dc2626";
+    case "high":
     case "eleve":
     case "modere":
       return "#ea580c";
+    case "medium":
+      return "#c2410c";
+    case "low":
     case "faible":
     case "stable":
       return "#15803d";
     default:
       return "#0f172a";
+  }
+}
+
+function scoreAccentTint(level?: string): string {
+  switch (level) {
+    case "critical":
+    case "critique":
+    case "seuil_critique_franchi":
+    case "tres_eleve":
+      return "#fee2e2";
+    case "high":
+    case "eleve":
+    case "modere":
+      return "#ffedd5";
+    case "medium":
+      return "#fed7aa";
+    case "low":
+    case "faible":
+    case "stable":
+      return "#dcfce7";
+    default:
+      return "#e2e8f0";
+  }
+}
+
+function formatExplanatoryLevel(level?: string): string {
+  switch (level) {
+    case "critical":
+      return "Criticite tres elevee";
+    case "high":
+      return "Criticite elevee";
+    case "medium":
+      return "Criticite moderee";
+    case "low":
+      return "Criticite faible";
+    default:
+      return "Criticite non evaluee";
   }
 }
 
@@ -875,6 +1261,40 @@ function compatibilityColor(level: "high" | "medium" | "low"): string {
     default:
       return "#475569";
   }
+}
+
+function formatComparisonCompatibility(level: "high" | "medium" | "low", percent: number): string {
+  if (percent <= 0) {
+    return "Non retenue";
+  }
+  return formatCompatibility(level);
+}
+
+function comparisonCompatibilityColor(level: "high" | "medium" | "low", percent: number): string {
+  if (percent <= 0) {
+    return "#64748b";
+  }
+  return compatibilityColor(level);
+}
+
+function formatComparisonDelta(delta: number): string {
+  if (delta > 0) {
+    return `+${delta} pts`;
+  }
+  if (delta < 0) {
+    return `${delta} pts`;
+  }
+  return "stable";
+}
+
+function comparisonDeltaColor(delta: number): string {
+  if (delta > 0) {
+    return "#15803d";
+  }
+  if (delta < 0) {
+    return "#b91c1c";
+  }
+  return "#475569";
 }
 
 function formatTrajectory(status: string): string {
@@ -920,6 +1340,15 @@ function sourceColor(status?: string): string {
   }
   return "#475569";
 }
+
+const ANALYSIS_DELTA_TRIGGER = {
+  hr: 10,
+  spo2: 2,
+  map: 5,
+  rr: 3,
+  temp: 0.3,
+  shockIndex: 0.08,
+} as const;
 
 const linkButton: CSSProperties = {
   textDecoration: "none",
@@ -975,4 +1404,13 @@ const darkButton: CSSProperties = {
   color: "#ffffff",
   padding: "10px 14px",
   borderRadius: 10
+};
+
+const comparisonCell: CSSProperties = {
+  borderRadius: 12,
+  border: "1px solid #e2e8f0",
+  background: "#ffffff",
+  padding: 12,
+  display: "grid",
+  gap: 4
 };

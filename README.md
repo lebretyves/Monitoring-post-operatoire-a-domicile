@@ -144,6 +144,7 @@ make seed
 - [docs/architecture.mmd](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\architecture.mmd)
 - [docs/case-generation.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\case-generation.md)
 - [docs/clinical-references.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\clinical-references.md)
+- [docs/antecedents-context-catalog.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\antecedents-context-catalog.md)
 - [docs/questionnaire-differentiel.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\questionnaire-differentiel.md)
 - [kb/postop-home-monitoring-signs.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\kb\postop-home-monitoring-signs.md)
 - [config/alert_rules.json](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\config\alert_rules.json)

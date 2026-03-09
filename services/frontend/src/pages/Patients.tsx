@@ -27,6 +27,8 @@ export function PatientsPage() {
   const [alarmLimits, setAlarmLimits] = useState<Record<string, PatientAlarmLimits>>(() => loadStoredAlarmLimits());
   const [viewMode, setViewMode] = useState<PatientMonitorLayout>("full");
   const prioritizationByPatient = new Map(prioritizedPatients.map((row) => [row.patient_id, row]));
+  const prioritizationLabel = formatPrioritizationSource(prioritizationStatus, prioritizationSource);
+  const recentAlertCount = alerts.length;
 
   useEffect(() => {
     window.localStorage.setItem(ALARM_STORAGE_KEY, JSON.stringify(alarmLimits));
@@ -61,7 +63,6 @@ export function PatientsPage() {
       await loadDashboard();
     };
     load().catch(console.error);
-    refreshPrioritization().catch(console.error);
     const cleanup = connectLiveSocket((event: LiveEvent) => {
       if (event.type === "vitals") {
         setPatients((current) =>
@@ -90,25 +91,33 @@ export function PatientsPage() {
       <section
         style={{
           padding: 24,
-          borderRadius: 28,
+          borderRadius: 30,
           background:
-            "radial-gradient(circle at top right, rgba(56, 189, 248, 0.22), transparent 28%), linear-gradient(135deg, #0b1220, #12324b 58%, #0f172a)",
+            "linear-gradient(180deg, rgba(5, 17, 30, 0.96), rgba(8, 31, 52, 0.96))",
           color: "#f8fafc",
-          boxShadow: "0 18px 36px rgba(15, 23, 42, 0.16)",
-          border: "1px solid rgba(148, 163, 184, 0.14)",
+          boxShadow: "0 20px 38px rgba(2, 12, 27, 0.28)",
+          border: "1px solid rgba(125, 164, 203, 0.16)",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
-          <div>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 18,
+            alignItems: "stretch",
+          }}
+        >
+          <div style={{ display: "grid", gap: 16, flex: "1 1 580px", maxWidth: 700 }}>
             <div
               style={{
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 8,
+                width: "fit-content",
                 padding: "6px 10px",
                 borderRadius: 999,
-                background: "rgba(148, 163, 184, 0.14)",
-                color: "#cbd5e1",
+                background: "rgba(94, 211, 255, 0.09)",
+                color: "#bfe9ff",
                 fontSize: 12,
                 fontWeight: 800,
                 letterSpacing: 1,
@@ -126,94 +135,225 @@ export function PatientsPage() {
               />
               Monitoring
             </div>
-            <h1 style={{ margin: "12px 0 0", fontSize: 32, lineHeight: 1.05 }}>Monitoring post-operatoire a domicile</h1>
-          </div>
-          <div style={{ display: "grid", gap: 10, justifyItems: "end", alignContent: "start" }}>
+            <div style={{ display: "grid", gap: 8 }}>
+              <h1 style={{ margin: 0, fontSize: 34, lineHeight: 1.05 }}>Monitoring post-operatoire a domicile</h1>
+              <div style={{ color: "#9fb6cb", fontSize: 14, maxWidth: 760 }}>
+                Supervision temps reel des scopes patients, controle des alertes et priorisation clinique
+                assistee.
+              </div>
+            </div>
             <div
               style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "10px 14px",
-                borderRadius: 14,
-                background: websocketBackground(wsStatus),
-                border: `1px solid ${websocketBorder(wsStatus)}`,
-                fontWeight: 800,
-                color: websocketText(wsStatus),
+                display: "grid",
+                gap: 14,
+                gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
               }}
             >
-              <span
+              <div
                 style={{
-                  width: 12,
-                  height: 12,
-                  borderRadius: 999,
-                  background: websocketColor(wsStatus),
-                  boxShadow: `0 0 14px ${websocketGlow(wsStatus)}`,
+                  padding: "18px 20px",
+                  borderRadius: 18,
+                  border: "1px solid rgba(125, 164, 203, 0.16)",
+                  background: "linear-gradient(180deg, rgba(7, 22, 38, 0.92), rgba(8, 30, 50, 0.82))",
+                  display: "grid",
+                  gap: 10,
+                  alignContent: "start",
                 }}
-              />
-              <span style={{ color: websocketLabelText(wsStatus), fontSize: 12, textTransform: "uppercase", letterSpacing: 1 }}>
-                WebSocket
-              </span>
-              <span style={{ color: websocketText(wsStatus) }}>{formatWebsocketStatus(wsStatus)}</span>
+              >
+                <div style={{ color: "#88a1bb", fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase" }}>
+                  Flux temps reel
+                </div>
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 10,
+                    width: "fit-content",
+                    padding: "10px 14px",
+                    borderRadius: 14,
+                    background: websocketBackground(wsStatus),
+                    border: `1px solid ${websocketBorder(wsStatus)}`,
+                    fontWeight: 800,
+                    color: websocketText(wsStatus),
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 12,
+                      height: 12,
+                      borderRadius: 999,
+                      background: websocketColor(wsStatus),
+                      boxShadow: `0 0 14px ${websocketGlow(wsStatus)}`,
+                    }}
+                  />
+                  <span
+                    style={{ color: websocketLabelText(wsStatus), fontSize: 12, textTransform: "uppercase", letterSpacing: 1 }}
+                  >
+                    WebSocket
+                  </span>
+                  <span style={{ color: websocketText(wsStatus) }}>{formatWebsocketStatus(wsStatus)}</span>
+                </div>
+                <div style={{ color: "#8ea6bd", fontSize: 13 }}>Mise a jour live des constantes et alertes.</div>
+              </div>
+
+              <div
+                style={{
+                  padding: "18px 20px",
+                  borderRadius: 18,
+                  border: "1px solid rgba(125, 164, 203, 0.16)",
+                  background: "linear-gradient(180deg, rgba(7, 22, 38, 0.92), rgba(8, 30, 50, 0.82))",
+                  display: "grid",
+                  gap: 14,
+                }}
+              >
+                <div style={{ color: "#88a1bb", fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase" }}>
+                  Etat du service
+                </div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <div
+                    style={{
+                      minWidth: 118,
+                      padding: "12px 14px",
+                      borderRadius: 14,
+                      background: "rgba(255, 255, 255, 0.04)",
+                      border: "1px solid rgba(125, 164, 203, 0.12)",
+                    }}
+                  >
+                    <div style={{ color: "#88a1bb", fontSize: 11, textTransform: "uppercase", letterSpacing: 1.2 }}>
+                      Scopes
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 26, fontWeight: 800 }}>{patients.length}</div>
+                  </div>
+                  <div
+                    style={{
+                      minWidth: 118,
+                      padding: "12px 14px",
+                      borderRadius: 14,
+                      background: "rgba(255, 255, 255, 0.04)",
+                      border: "1px solid rgba(125, 164, 203, 0.12)",
+                    }}
+                  >
+                    <div style={{ color: "#88a1bb", fontSize: 11, textTransform: "uppercase", letterSpacing: 1.2 }}>
+                      Alertes
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 26, fontWeight: 800 }}>{recentAlertCount}</div>
+                  </div>
+                  <div
+                    style={{
+                      minWidth: 160,
+                      padding: "12px 14px",
+                      borderRadius: 14,
+                      background: "rgba(255, 255, 255, 0.04)",
+                      border: "1px solid rgba(125, 164, 203, 0.12)",
+                    }}
+                  >
+                    <div style={{ color: "#88a1bb", fontSize: 11, textTransform: "uppercase", letterSpacing: 1.2 }}>
+                      Patients tries
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 26, fontWeight: 800 }}>
+                      {prioritizedPatients.length}
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <button
-              type="button"
-              disabled={refreshing}
-              onClick={async () => {
-                setRefreshing(true);
-                try {
-                  await refreshPatients();
-                  window.setTimeout(() => {
-                    loadDashboard().catch(console.error);
-                    refreshPrioritization().catch(console.error);
-                  }, 1500);
-                } catch (error) {
-                  console.error(error);
-                } finally {
-                  setRefreshing(false);
-                }
-              }}
-              style={{
-                border: 0,
-                background: refreshing ? "#64748b" : "#facc15",
-                color: "#0f172a",
-                padding: "10px 14px",
-                borderRadius: 10,
-                cursor: refreshing ? "default" : "pointer",
-                fontWeight: 800
-              }}
-            >
-              {refreshing ? "Refresh..." : "Refresh demo"}
-            </button>
-            <button
-              type="button"
-              disabled={prioritizing}
-              onClick={() => {
-                refreshPrioritization().catch(console.error);
-              }}
-              style={{
-                border: 0,
-                background: prioritizing ? "#64748b" : "#e2e8f0",
-                color: "#0f172a",
-                padding: "10px 14px",
-                borderRadius: 10,
-                cursor: prioritizing ? "default" : "pointer",
-                fontWeight: 800
-              }}
-            >
-              {prioritizing ? "Analyse..." : "Prioriser les patients"}
-            </button>
           </div>
+
+          <aside
+            style={{
+              flex: "0 1 380px",
+              minWidth: 320,
+              padding: 20,
+              borderRadius: 22,
+              border: "1px solid rgba(125, 164, 203, 0.16)",
+              background: "linear-gradient(180deg, rgba(8, 22, 36, 0.94), rgba(8, 25, 42, 0.88))",
+              display: "grid",
+              gap: 14,
+            }}
+          >
+            <div style={{ display: "grid", gap: 4 }}>
+              <div style={{ color: "#88a1bb", fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase" }}>
+                Operations de supervision
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#f4f8fb" }}>Actions operateur</div>
+            </div>
+            <div style={{ display: "grid", gap: 10 }}>
+              <button
+                type="button"
+                disabled={refreshing}
+                onClick={async () => {
+                  setRefreshing(true);
+                  try {
+                    await refreshPatients();
+                    window.setTimeout(() => {
+                      loadDashboard().catch(console.error);
+                      refreshPrioritization().catch(console.error);
+                    }, 1500);
+                  } catch (error) {
+                    console.error(error);
+                  } finally {
+                    setRefreshing(false);
+                  }
+                }}
+                style={{
+                  border: 0,
+                  background: refreshing ? "#64748b" : "#facc15",
+                  color: "#0f172a",
+                  padding: "11px 14px",
+                  borderRadius: 12,
+                  cursor: refreshing ? "default" : "pointer",
+                  fontWeight: 800,
+                }}
+              >
+                {refreshing ? "Refresh..." : "Refresh demo"}
+              </button>
+              <button
+                type="button"
+                disabled={prioritizing}
+                onClick={() => {
+                  refreshPrioritization().catch(console.error);
+                }}
+                style={{
+                  border: 0,
+                  background: prioritizing ? "#64748b" : "#e2e8f0",
+                  color: "#0f172a",
+                  padding: "11px 14px",
+                  borderRadius: 12,
+                  cursor: prioritizing ? "default" : "pointer",
+                  fontWeight: 800,
+                }}
+              >
+                {prioritizing ? "Analyse..." : "Prioriser les patients"}
+              </button>
+            </div>
+            <div
+              style={{
+                padding: "14px 16px",
+                borderRadius: 16,
+                background: "rgba(255, 255, 255, 0.04)",
+                border: "1px solid rgba(125, 164, 203, 0.12)",
+                display: "grid",
+                gap: 8,
+              }}
+            >
+              <div style={{ color: "#88a1bb", fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase" }}>
+                Source priorisation
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#dbe8f5" }}>{prioritizationLabel}</div>
+            </div>
+          </aside>
         </div>
       </section>
 
       <section style={{ display: "grid", gap: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <div />
-          <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
-            <div style={{ color: "#475569", fontSize: 13, fontWeight: 700 }}>
-              Source priorisation: {formatPrioritizationSource(prioritizationStatus, prioritizationSource)}
+          <div style={{ display: "grid", gap: 4 }}>
+            <div style={{ color: "#f8fafc", fontSize: 22, fontWeight: 800 }}>Vue moniteurs patients</div>
+            <div style={{ color: "#cbd5e1", fontSize: 13 }}>
+              {patients.length} scopes affiches, tri manuel et vues operateur conservees.
             </div>
+          </div>
+          <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {([
               ["full", "Vue complete"],

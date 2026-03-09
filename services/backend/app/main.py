@@ -96,6 +96,7 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
                     influx.clear_patient_history(patient_id)
                     postgres.clear_patient_alerts(patient_id)
                     postgres.clear_patient_notifications(patient_id)
+                    postgres.clear_patient_analysis_cache(patient_id)
                     state.clear_patient(patient_id)
                     last_vitals.pop(patient_id, None)
                 consumer.publish_refresh_request(assignments)

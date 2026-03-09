@@ -4,55 +4,64 @@ import type { ClinicalContextSelection } from "../types/vitals";
 
 const PATIENT_FACTORS = [
   "Age > 70 ans",
+  "Fragilite / perte d'autonomie",
+  "Trouble cognitif / ATCD de delirium",
   "Diabete",
   "Obesite",
   "BPCO / asthme",
   "Tabagisme actif ou ancien",
+  "SAOS",
   "Anemie",
   "Insuffisance renale",
-  "Anticoagulation",
+  "Hepatopathie chronique / cirrhose",
+  "Anticoagulation / antiagregants",
   "Antecedent TVP / EP",
   "Coronaropathie / insuffisance cardiaque",
+  "Cancer actif ou recent",
   "Immunodepression / corticoides",
+  "Dependance alcool / risque de sevrage",
   "Douleur chronique / opioides",
   "Anxiete / facteurs psychiques",
-  "SAOS",
+  "Grossesse en cours",
   "Autre (preciser dans le commentaire)",
 ];
 
 const PERIOPERATIVE_CONTEXT = [
   "ASA >= 3",
   "Chirurgie urgente",
+  "Chirurgie majeure / complexe",
+  "Chirurgie intraperitoneale ou thoracique",
+  "Chirurgie carcinologique",
   "Duree operatoire prolongee",
   "Immobilite prolongee",
+  "Risque hemorragique eleve / transfusion",
   "Infection recente",
-  "Ventilation prolongee",
+  "Ventilation prolongee / extubation a risque",
+  "Hypothermie peri-op",
   "Denutrition / hypoalbuminemie",
-  "Autre (preciser dans le commentaire)",
-];
-
-const COMPLICATIONS_TO_DISCUSS = [
-  "Sepsis",
-  "Embolie pulmonaire",
-  "Pneumopathie / IRA",
-  "Hemorragie post-op",
-  "Douleur post-op",
-  "Complication cardiaque post-op",
   "Autre (preciser dans le commentaire)",
 ];
 
 interface ClinicalContextPanelProps {
   value: ClinicalContextSelection;
   onChange: (next: ClinicalContextSelection) => void;
-  onAnalyze: () => void;
-  loading: boolean;
+  onAnalyze?: () => void;
+  loading?: boolean;
+  title?: string;
+  description?: string;
+  analyzeLabel?: string;
+  showAnalyzeButton?: boolean;
 }
 
 export function ClinicalContextPanel({
   value,
   onChange,
   onAnalyze,
-  loading,
+  loading = false,
+  title = "Contexte patient",
+  description = "Ces elements enrichissent uniquement l'analyse IA. Ils ne modifient ni le simulateur, ni les alertes, ni les constantes.",
+  analyzeLabel = "Analyser avec contexte patient",
+  showAnalyzeButton = true,
 }: ClinicalContextPanelProps) {
   return (
     <div
@@ -66,9 +75,9 @@ export function ClinicalContextPanel({
       }}
     >
       <div>
-        <h3 style={{ marginTop: 0, marginBottom: 6 }}>Contexte patient</h3>
+        <h3 style={{ marginTop: 0, marginBottom: 6 }}>{title}</h3>
         <div style={{ color: "#64748b", fontSize: 14 }}>
-          Ces elements enrichissent uniquement l'analyse IA. Ils ne modifient ni le simulateur, ni les alertes, ni les constantes.
+          {description}
         </div>
       </div>
 
@@ -84,13 +93,6 @@ export function ClinicalContextPanel({
         options={PERIOPERATIVE_CONTEXT}
         selected={value.perioperative_context}
         onChange={(items) => onChange({ ...value, perioperative_context: items })}
-      />
-
-      <ContextDropdown
-        title="Complications a discuter"
-        options={COMPLICATIONS_TO_DISCUSS}
-        selected={value.complications_to_discuss}
-        onChange={(items) => onChange({ ...value, complications_to_discuss: items })}
       />
 
       <label style={{ display: "grid", gap: 6, color: "#334155", fontWeight: 600 }}>
@@ -124,22 +126,24 @@ export function ClinicalContextPanel({
         <div style={{ color: "#64748b", fontSize: 13 }}>
           Clique sur une liste pour l'ouvrir. Chaque choix est visible juste dessous et tu peux supprimer un item individuellement.
         </div>
-        <button
-          type="button"
-          onClick={onAnalyze}
-          disabled={loading}
-          style={{
-            border: "none",
-            borderRadius: 999,
-            padding: "10px 16px",
-            background: "#0f172a",
-            color: "#ffffff",
-            fontWeight: 700,
-            cursor: loading ? "wait" : "pointer",
-          }}
-        >
-          {loading ? "Analyse IA..." : "Analyser avec contexte patient"}
-        </button>
+        {showAnalyzeButton && onAnalyze ? (
+          <button
+            type="button"
+            onClick={onAnalyze}
+            disabled={loading}
+            style={{
+              border: "none",
+              borderRadius: 999,
+              padding: "10px 16px",
+              background: "#0f172a",
+              color: "#ffffff",
+              fontWeight: 700,
+              cursor: loading ? "wait" : "pointer",
+            }}
+          >
+            {loading ? "Analyse IA..." : analyzeLabel}
+          </button>
+        ) : null}
       </div>
     </div>
   );

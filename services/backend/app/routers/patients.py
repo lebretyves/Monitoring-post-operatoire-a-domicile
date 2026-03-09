@@ -219,6 +219,7 @@ async def refresh_patients(request: Request):
         services.influx.clear_patient_history(patient_id)
         services.postgres.clear_patient_alerts(patient_id)
         services.postgres.clear_patient_notifications(patient_id)
+        services.postgres.clear_patient_analysis_cache(patient_id)
         services.state.clear_patient(patient_id)
         services.last_vitals.pop(patient_id, None)
     await services.ws_manager.broadcast(notifications_reset_event(patient_ids))

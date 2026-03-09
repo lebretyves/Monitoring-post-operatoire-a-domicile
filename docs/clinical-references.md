@@ -115,6 +115,18 @@ Ces projets sont utiles comme comparaison technique d'interface, mais ne servent
 - [Smart health monitoring system][github-smart-monitoring]
   Exemple de dashboard temps reel avec constantes et alertes, sans couche explicite d'incertitude clinique.
 
+## Catalogue Du Panneau Antecedents Medicaux Chirurgicaux
+
+Le catalogue source du panneau UI `Antecedents medicaux chirurgicaux` est documente a part dans
+[antecedents-context-catalog.md](./antecedents-context-catalog.md).
+
+Ce document verifie:
+
+- les items `Terrain patient` deja exposes
+- les items `Contexte peri-op` deja exposes
+- les ajouts retenus apres revue `MAPAR`, puis `SFAR` / `NICE` / `ASA` / `ACOG` quand `MAPAR` ne couvrait pas directement le besoin
+- la surveillance post-operatoire specifique associee a chaque item
+
 ## Respiratoire: pneumopathie, IRA, hypoxemie post-op
 
 - [MAPAR, Hypoxemie postoperatoire - Cas clinique][mapar-hypox]

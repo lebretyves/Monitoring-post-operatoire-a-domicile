@@ -119,7 +119,6 @@ def test_patients_and_trends_endpoints() -> None:
                     json={
                         "patient_factors": ["Diabete", "Obesite"],
                         "perioperative_context": ["ASA >= 3"],
-                        "complications_to_discuss": ["Sepsis"],
                         "free_text": "Contexte clinique declare pour test",
                     },
                 )
@@ -462,6 +461,355 @@ def test_clinical_package_prioritizes_progressive_pneumonia_over_ep() -> None:
             os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
 
 
+def test_clinical_package_reranks_from_questionnaire_clues() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                history = [
+                    {
+                        "ts": "2026-03-04T08:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "respiratory_case_to_characterize",
+                        "scenario_label": "Detresse respiratoire a caracteriser",
+                        "hr": 80,
+                        "spo2": 97,
+                        "sbp": 124,
+                        "dbp": 78,
+                        "map": 93,
+                        "rr": 16,
+                        "temp": 36.8,
+                        "room": "A102",
+                        "battery": 96,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(80 / 124, 2),
+                    },
+                    {
+                        "ts": "2026-03-04T12:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "respiratory_case_to_characterize",
+                        "scenario_label": "Detresse respiratoire a caracteriser",
+                        "hr": 84,
+                        "spo2": 95,
+                        "sbp": 122,
+                        "dbp": 76,
+                        "map": 91,
+                        "rr": 18,
+                        "temp": 36.8,
+                        "room": "A102",
+                        "battery": 95,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(84 / 122, 2),
+                    },
+                    {
+                        "ts": "2026-03-04T16:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "respiratory_case_to_characterize",
+                        "scenario_label": "Detresse respiratoire a caracteriser",
+                        "hr": 92,
+                        "spo2": 94,
+                        "sbp": 120,
+                        "dbp": 74,
+                        "map": 89,
+                        "rr": 21,
+                        "temp": 36.9,
+                        "room": "A102",
+                        "battery": 94,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(92 / 120, 2),
+                    },
+                    {
+                        "ts": "2026-03-04T19:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "respiratory_case_to_characterize",
+                        "scenario_label": "Detresse respiratoire a caracteriser",
+                        "hr": 106,
+                        "spo2": 93,
+                        "sbp": 118,
+                        "dbp": 72,
+                        "map": 88,
+                        "rr": 24,
+                        "temp": 36.9,
+                        "room": "A102",
+                        "battery": 93,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(106 / 118, 2),
+                    },
+                ]
+                for reading in history:
+                    services.state.push(reading)
+                    services.influx.write_vital(reading)
+                services.last_vitals["PAT-002"] = history[-1]
+
+                baseline_response = client.get("/api/llm/PAT-002/clinical-package")
+                assert baseline_response.status_code == 200
+                baseline_payload = baseline_response.json()
+                assert baseline_payload["source"] == "rule-based"
+                assert (
+                    baseline_payload["hypothesis_ranking"][0]["label"]
+                    == "Complication respiratoire post-op (pneumopathie / IRA)"
+                )
+                assert sum(row["compatibility_percent"] for row in baseline_payload["hypothesis_ranking"]) == 100
+
+                questionnaire_response = client.post(
+                    "/api/llm/PAT-002/clinical-package",
+                    json={
+                        "questionnaire": {
+                            "responder": "ide",
+                            "comment": "essoufflement brutal avec douleur pleurale et mollet gonfle",
+                            "answers": [
+                                {
+                                    "module_id": "respiratory_differential",
+                                    "question_id": "dyspnea_onset",
+                                    "answer": "brutal",
+                                },
+                                {
+                                    "module_id": "respiratory_differential",
+                                    "question_id": "chest_pain_type",
+                                    "answer": "pleurale",
+                                },
+                                {
+                                    "module_id": "respiratory_differential",
+                                    "question_id": "cough",
+                                    "answer": "no",
+                                },
+                                {
+                                    "module_id": "respiratory_differential",
+                                    "question_id": "sputum",
+                                    "answer": "none",
+                                },
+                                {
+                                    "module_id": "respiratory_differential",
+                                    "question_id": "calf_pain_swelling",
+                                    "answer": "yes",
+                                },
+                            ],
+                        }
+                    },
+                )
+                assert questionnaire_response.status_code == 200
+                questionnaire_payload = questionnaire_response.json()
+                assert questionnaire_payload["source"] == "rule-based"
+                assert questionnaire_payload["hypothesis_ranking"][0]["label"] == "Embolie pulmonaire possible"
+                assert questionnaire_payload["hypothesis_ranking"][0]["compatibility_percent"] > 40
+                assert sum(row["compatibility_percent"] for row in questionnaire_payload["hypothesis_ranking"]) == 100
+                assert "questionnaire differentiel" in questionnaire_payload["structured_synthesis"].lower()
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_clinical_package_cache_and_resting_state_persist() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                history = [
+                    {
+                        "ts": "2026-03-04T08:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "pneumonia_ira",
+                        "scenario_label": "Pneumopathie ou IRA post-op progressive",
+                        "hr": 80,
+                        "spo2": 97,
+                        "sbp": 124,
+                        "dbp": 78,
+                        "map": 93,
+                        "rr": 16,
+                        "temp": 36.8,
+                        "room": "A102",
+                        "battery": 96,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(80 / 124, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T14:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "pneumonia_ira",
+                        "scenario_label": "Pneumopathie ou IRA post-op progressive",
+                        "hr": 106,
+                        "spo2": 93,
+                        "sbp": 118,
+                        "dbp": 74,
+                        "map": 89,
+                        "rr": 24,
+                        "temp": 38.2,
+                        "room": "A102",
+                        "battery": 94,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(106 / 118, 2),
+                    },
+                ]
+                for reading in history:
+                    services.state.push(reading)
+                    services.influx.write_vital(reading)
+                services.last_vitals["PAT-002"] = history[-1]
+
+                first_response = client.get("/api/llm/PAT-002/clinical-package")
+                assert first_response.status_code == 200
+                first_payload = first_response.json()
+                assert first_payload["analysis_state"]["cache_status"] == "fresh"
+                assert first_payload["summary_text"]
+                assert first_payload["explanatory_score"]["score"] >= 0
+
+                second_response = client.get("/api/llm/PAT-002/clinical-package")
+                assert second_response.status_code == 200
+                second_payload = second_response.json()
+                assert second_payload["analysis_state"]["cache_status"] == "cached"
+                assert second_payload["summary_text"] == first_payload["summary_text"]
+
+                summary_response = client.get("/api/summaries/PAT-002")
+                assert summary_response.status_code == 200
+                assert summary_response.json()["summary"] == second_payload["summary_text"]
+
+                questionnaire_response = client.post(
+                    "/api/llm/PAT-002/clinical-package",
+                    json={
+                        "questionnaire": {
+                            "responder": "patient",
+                            "comment": "Essoufflement brutal",
+                            "answers": [
+                                {
+                                    "module_id": "respiratory_differential",
+                                    "question_id": "dyspnea_onset",
+                                    "answer": "brutal",
+                                }
+                            ],
+                        }
+                    },
+                )
+                assert questionnaire_response.status_code == 200
+                resting_payload = questionnaire_response.json()
+                assert resting_payload["analysis_state"]["mode"] == "resting"
+                assert resting_payload["questionnaire_state"]["answers"][0]["answer"] == "brutal"
+
+                updated_reading = {
+                    **history[-1],
+                    "ts": "2026-03-05T15:00:00Z",
+                    "hr": 120,
+                    "map": 80,
+                    "rr": 28,
+                    "shock_index": round(120 / 118, 2),
+                }
+                services.state.push(updated_reading)
+                services.influx.write_vital(updated_reading)
+                services.last_vitals["PAT-002"] = updated_reading
+
+                stale_response = client.get("/api/llm/PAT-002/clinical-package")
+                assert stale_response.status_code == 200
+                stale_payload = stale_response.json()
+                assert stale_payload["analysis_state"]["mode"] == "stale"
+                assert stale_payload["analysis_state"]["cache_status"] == "stale"
+                assert stale_payload["analysis_state"]["delta_signals"]
+                assert stale_payload["summary_text"] == resting_payload["summary_text"]
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_questionnaire_selects_subtle_hemodynamic_and_infectious_modules() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+
+                low_grade_bleed_history = [
+                    {
+                        "ts": "2026-03-04T08:00:00Z",
+                        "values": {"hr": 75, "spo2": 98, "rr": 15, "temp": 36.8, "map": 92, "shock_index": round(75 / 123, 2)},
+                    },
+                    {
+                        "ts": "2026-03-05T08:00:00Z",
+                        "values": {"hr": 82, "spo2": 98, "rr": 16, "temp": 36.8, "map": 89, "shock_index": round(82 / 119, 2)},
+                    },
+                    {
+                        "ts": "2026-03-05T14:00:00Z",
+                        "values": {"hr": 88, "spo2": 97, "rr": 17, "temp": 36.7, "map": 86, "shock_index": round(88 / 114, 2)},
+                    },
+                    {
+                        "ts": "2026-03-05T20:00:00Z",
+                        "values": {"hr": 94, "spo2": 97, "rr": 18, "temp": 36.7, "map": 83, "shock_index": round(94 / 110, 2)},
+                    },
+                ]
+                hemodynamic_selection = services.questionnaire_engine.select_modules(
+                    last_vitals={
+                        "hr": 94,
+                        "spo2": 97,
+                        "rr": 18,
+                        "temp": 36.7,
+                        "map": 83,
+                        "shock_index": round(94 / 110, 2),
+                    },
+                    alerts=[],
+                    history_points=low_grade_bleed_history,
+                )
+                assert {module["id"] for module in hemodynamic_selection.modules} == {"hemodynamic_differential"}
+
+                subtle_sepsis_history = [
+                    {
+                        "ts": "2026-03-04T08:00:00Z",
+                        "values": {"hr": 79, "spo2": 97, "rr": 16, "temp": 36.9, "map": 91, "shock_index": round(79 / 123, 2)},
+                    },
+                    {
+                        "ts": "2026-03-05T08:00:00Z",
+                        "values": {"hr": 86, "spo2": 97, "rr": 18, "temp": 37.2, "map": 89, "shock_index": round(86 / 122, 2)},
+                    },
+                    {
+                        "ts": "2026-03-05T16:00:00Z",
+                        "values": {"hr": 92, "spo2": 96, "rr": 20, "temp": 37.6, "map": 86, "shock_index": round(92 / 118, 2)},
+                    },
+                    {
+                        "ts": "2026-03-05T22:00:00Z",
+                        "values": {"hr": 98, "spo2": 96, "rr": 21, "temp": 37.8, "map": 82, "shock_index": round(98 / 114, 2)},
+                    },
+                ]
+                infectious_selection = services.questionnaire_engine.select_modules(
+                    last_vitals={
+                        "hr": 98,
+                        "spo2": 96,
+                        "rr": 21,
+                        "temp": 37.8,
+                        "map": 82,
+                        "shock_index": round(98 / 114, 2),
+                    },
+                    alerts=[],
+                    history_points=subtle_sepsis_history,
+                )
+                selected_module_ids = {module["id"] for module in infectious_selection.modules}
+                assert "infectious_differential" in selected_module_ids
+                assert "pain_differential" not in selected_module_ids
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
 def test_clinical_package_prioritizes_hemorrhage_over_cardiac_when_hypovolemic() -> None:
     previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
     try:
@@ -676,6 +1024,16 @@ def test_clinical_package_prioritizes_pain_when_fluctuating_without_infectious_o
             app = create_app(test_mode=True)
             with TestClient(app) as client:
                 services = client.app.state.services
+                services.postgres.patients["PAT-006"] = {
+                    "id": "PAT-006",
+                    "full_name": "PAT-006",
+                    "profile": "baseline_normale",
+                    "surgery_type": "chirurgie thoracique",
+                    "postop_day": 1,
+                    "risk_level": "surveillance_postop",
+                    "room": "A106",
+                    "history": [],
+                }
                 history = [
                     {
                         "ts": "2026-03-04T08:00:00Z",
@@ -779,6 +1137,16 @@ def test_clinical_package_prioritizes_abrupt_cardiac_low_output_over_ep_when_res
             app = create_app(test_mode=True)
             with TestClient(app) as client:
                 services = client.app.state.services
+                services.postgres.patients["PAT-007"] = {
+                    "id": "PAT-007",
+                    "full_name": "PAT-007",
+                    "profile": "baseline_normale",
+                    "surgery_type": "chirurgie vasculaire majeure",
+                    "postop_day": 2,
+                    "risk_level": "surveillance_postop",
+                    "room": "A107",
+                    "history": [],
+                }
                 history = [
                     {
                         "ts": "2026-03-04T08:00:00Z",

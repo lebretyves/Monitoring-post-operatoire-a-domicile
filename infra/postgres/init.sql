@@ -36,6 +36,26 @@ CREATE TABLE IF NOT EXISTS notes (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS llm_analysis_cache (
+    patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+    analysis_type TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    summary_text TEXT NOT NULL DEFAULT '',
+    questionnaire_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    analysis_state TEXT NOT NULL DEFAULT 'active',
+    anchor_vitals JSONB,
+    delta_signals JSONB NOT NULL DEFAULT '[]'::jsonb,
+    trigger_reason TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'rule-based',
+    llm_status TEXT NOT NULL DEFAULT 'rule-based',
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (patient_id, analysis_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_analysis_cache_updated_at ON llm_analysis_cache (updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS feedback_ml (
     id BIGSERIAL PRIMARY KEY,
     patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,

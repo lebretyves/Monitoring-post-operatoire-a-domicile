@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.llm.clinical_context import ClinicalContextPayload
+from app.llm.clinical_context import ClinicalContextPayload, QuestionnaireResponsePayload
 from app.llm.prompt_templates import (
     CLINICAL_PACKAGE_SYSTEM_PROMPT,
     PRIORITIZATION_SYSTEM_PROMPT,
@@ -17,6 +19,19 @@ from app.llm.prompt_templates import (
 
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
+
+
+ANALYSIS_CACHE_TYPE = "clinical_package"
+DELTA_TRIGGER = {
+    "hr": 10,
+    "spo2": 2,
+    "map": 5,
+    "rr": 3,
+    "temp": 0.3,
+    "shock_index": 0.08,
+}
+ANALYSIS_STATE_LEVELS = {"active": 0, "resting": 1, "stale": 2}
+PRIORITY_LEVELS = {"low": 0, "medium": 1, "high": 2}
 
 
 SCENARIO_REVIEW_SCHEMA = {
@@ -74,6 +89,7 @@ CLINICAL_PACKAGE_SCHEMA = {
                 "properties": {
                     "label": {"type": "string"},
                     "compatibility": {"type": "string", "enum": ["high", "medium", "low"]},
+                    "compatibility_percent": {"type": "integer", "minimum": 0, "maximum": 100},
                     "arguments_for": {"type": "array", "items": {"type": "string"}},
                     "arguments_against": {"type": "array", "items": {"type": "string"}},
                 },
@@ -123,14 +139,35 @@ PRIORITIZATION_SCHEMA = {
 class HypothesisRow(BaseModel):
     label: str
     compatibility: Literal["high", "medium", "low"]
+    compatibility_percent: int = Field(ge=0, le=100)
     arguments_for: list[str]
     arguments_against: list[str]
+
+
+class ExplanatoryScoreResponse(BaseModel):
+    score: int = Field(ge=0, le=100)
+    level: Literal["low", "medium", "high", "critical"]
+    reasons: list[str]
+
+
+class AnalysisStateResponse(BaseModel):
+    mode: Literal["active", "resting", "stale"]
+    cache_status: Literal["fresh", "cached", "stale"]
+    generated_at: str | None = None
+    submitted_at: str | None = None
+    delta_signals: list[str] = Field(default_factory=list)
+    trigger_reason: str = ""
+    anchor_vitals: dict[str, Any] | None = None
 
 
 class ClinicalPackageResponse(BaseModel):
     source: Literal["ollama", "rule-based"]
     llm_status: Literal["ollama", "rule-based", "llm-unavailable", "disabled"] = "rule-based"
     patient_id: str
+    summary_text: str
+    explanatory_score: ExplanatoryScoreResponse
+    analysis_state: AnalysisStateResponse
+    questionnaire_state: QuestionnaireResponsePayload | None = None
     structured_synthesis: str
     alert_explanations: list[str]
     hypothesis_ranking: list[HypothesisRow]
@@ -234,6 +271,549 @@ def _prompt_context_from_payload(services: object, payload: ClinicalContextPaylo
     return prompt_context
 
 
+def _normalize_questionnaire_state(questionnaire_payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(questionnaire_payload, dict):
+        return None
+    raw_answers = questionnaire_payload.get("answers") or []
+    if not isinstance(raw_answers, list):
+        raw_answers = []
+    answers: list[dict[str, str]] = []
+    for row in raw_answers:
+        if not isinstance(row, dict):
+            continue
+        module_id = str(row.get("module_id") or "").strip()
+        question_id = str(row.get("question_id") or "").strip()
+        answer = str(row.get("answer") or "").strip()
+        if not module_id or not question_id or not answer:
+            continue
+        answers.append(
+            {
+                "module_id": module_id,
+                "question_id": question_id,
+                "answer": answer,
+            }
+        )
+    answers.sort(key=lambda item: (item["module_id"], item["question_id"]))
+    comment = str(questionnaire_payload.get("comment") or "").strip()
+    responder = str(questionnaire_payload.get("responder") or "patient").strip() or "patient"
+    if not answers and not comment and responder == "patient":
+        return None
+    return {
+        "responder": responder,
+        "comment": comment,
+        "answers": answers,
+    }
+
+
+def _alert_level_rank(level: str) -> int:
+    return {"INFO": 1, "WARNING": 2, "CRITICAL": 3}.get(level.upper(), 0)
+
+
+def _alert_signature(alerts: list[dict[str, Any]]) -> list[str]:
+    return sorted(
+        {
+            f"{str(alert.get('rule_id') or 'rule')}:{str(alert.get('level') or 'INFO').upper()}"
+            for alert in alerts
+        }
+    )
+
+
+def _max_alert_level(alerts: list[dict[str, Any]]) -> str:
+    levels = [str(alert.get("level") or "INFO").upper() for alert in alerts]
+    if "CRITICAL" in levels:
+        return "CRITICAL"
+    if "WARNING" in levels:
+        return "WARNING"
+    if "INFO" in levels:
+        return "INFO"
+    return "NONE"
+
+
+def _band(value: float, *, cuts: list[tuple[float, str]], default: str) -> str:
+    for threshold, label in cuts:
+        if value <= threshold:
+            return label
+    return default
+
+
+def _analysis_anchor(last_vitals: dict[str, Any], alerts: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "ts": last_vitals.get("ts"),
+        "hr": float(last_vitals.get("hr", 0) or 0),
+        "spo2": float(last_vitals.get("spo2", 0) or 0),
+        "map": float(last_vitals.get("map", 0) or 0),
+        "rr": float(last_vitals.get("rr", 0) or 0),
+        "temp": float(last_vitals.get("temp", 0) or 0),
+        "shock_index": float(last_vitals.get("shock_index", 0) or 0),
+        "max_alert_level": _max_alert_level(alerts),
+        "alert_signature": _alert_signature(alerts),
+    }
+
+
+def _detect_backend_delta(
+    anchor: dict[str, Any] | None,
+    last_vitals: dict[str, Any],
+    alerts: list[dict[str, Any]],
+) -> list[str]:
+    if not isinstance(anchor, dict):
+        return []
+
+    signals: list[str] = []
+    hr = float(last_vitals.get("hr", 0) or 0)
+    spo2 = float(last_vitals.get("spo2", 0) or 0)
+    map_value = float(last_vitals.get("map", 0) or 0)
+    rr = float(last_vitals.get("rr", 0) or 0)
+    temp = float(last_vitals.get("temp", 0) or 0)
+    shock_index = float(last_vitals.get("shock_index", 0) or 0)
+
+    if abs(hr - float(anchor.get("hr", 0) or 0)) >= DELTA_TRIGGER["hr"]:
+        signals.append(f"FC {hr - float(anchor.get('hr', 0) or 0):+.0f} bpm")
+    if abs(spo2 - float(anchor.get("spo2", 0) or 0)) >= DELTA_TRIGGER["spo2"]:
+        signals.append(f"SpO2 {spo2 - float(anchor.get('spo2', 0) or 0):+.0f} pts")
+    if abs(map_value - float(anchor.get("map", 0) or 0)) >= DELTA_TRIGGER["map"]:
+        signals.append(f"TAM {map_value - float(anchor.get('map', 0) or 0):+.0f} mmHg")
+    if abs(rr - float(anchor.get("rr", 0) or 0)) >= DELTA_TRIGGER["rr"]:
+        signals.append(f"FR {rr - float(anchor.get('rr', 0) or 0):+.0f}/min")
+    if abs(temp - float(anchor.get("temp", 0) or 0)) >= DELTA_TRIGGER["temp"]:
+        signals.append(f"T {temp - float(anchor.get('temp', 0) or 0):+.1f} C")
+    if abs(shock_index - float(anchor.get("shock_index", 0) or 0)) >= DELTA_TRIGGER["shock_index"]:
+        signals.append(f"shock index {shock_index - float(anchor.get('shock_index', 0) or 0):+.2f}")
+
+    current_level = _max_alert_level(alerts)
+    previous_level = str(anchor.get("max_alert_level") or "NONE").upper()
+    if _alert_level_rank(current_level) > _alert_level_rank(previous_level):
+        signals.append(f"Nouvelle alerte {current_level.lower()}")
+
+    previous_signature = {str(item) for item in anchor.get("alert_signature") or []}
+    current_signature = set(_alert_signature(alerts))
+    new_signatures = sorted(item for item in current_signature if item not in previous_signature)
+    if new_signatures and all("INFO" not in item for item in new_signatures):
+        signals.append(f"Nouvelles alertes: {', '.join(new_signatures[:2])}")
+
+    return signals
+
+
+def _clinical_context_hash(prompt_context: dict[str, Any]) -> str:
+    serialized = json.dumps(prompt_context, sort_keys=True, ensure_ascii=True)
+    return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
+
+
+def _analysis_fingerprint(
+    *,
+    surgery_type: str,
+    postop_day: int,
+    last_vitals: dict[str, Any],
+    alerts: list[dict[str, Any]],
+    history_points: list[dict[str, Any]],
+    prompt_context: dict[str, Any],
+) -> str:
+    hr = float(last_vitals.get("hr", 0) or 0)
+    spo2 = float(last_vitals.get("spo2", 0) or 0)
+    map_value = float(last_vitals.get("map", 0) or 0)
+    rr = float(last_vitals.get("rr", 0) or 0)
+    temp = float(last_vitals.get("temp", 0) or 0)
+    shock_index = float(last_vitals.get("shock_index", 0) or 0)
+
+    hr_delta = _history_delta(history_points, "hr", hr)
+    spo2_delta = _history_delta(history_points, "spo2", spo2)
+    map_delta = _history_delta(history_points, "map", map_value)
+    rr_delta = _history_delta(history_points, "rr", rr)
+    temp_delta = _history_delta(history_points, "temp", temp)
+
+    fingerprint_payload = {
+        "surgery_type": surgery_type.strip().lower(),
+        "postop_day": int(postop_day),
+        "bands": {
+            "hr": _band(hr, cuts=[(94, "normal"), (109, "elevated")], default="high"),
+            "spo2": _band(spo2, cuts=[(91, "severe"), (94, "low")], default="normal"),
+            "map": _band(map_value, cuts=[(69, "low"), (79, "soft")], default="normal"),
+            "rr": _band(rr, cuts=[(20, "normal"), (23, "elevated")], default="high"),
+            "temp": _band(temp, cuts=[(35.9, "low"), (37.6, "normal"), (38.4, "elevated")], default="high"),
+            "shock_index": _band(shock_index, cuts=[(0.81, "normal"), (0.89, "elevated")], default="high"),
+        },
+        "deltas": {
+            "hr": _band(abs(hr_delta), cuts=[(4, "stable"), (11, "drift")], default="major"),
+            "spo2": _band(abs(spo2_delta), cuts=[(1, "stable"), (2, "drift")], default="major"),
+            "map": _band(abs(map_delta), cuts=[(4, "stable"), (8, "drift")], default="major"),
+            "rr": _band(abs(rr_delta), cuts=[(2, "stable"), (4, "drift")], default="major"),
+            "temp": _band(abs(temp_delta), cuts=[(0.2, "stable"), (0.5, "drift")], default="major"),
+        },
+        "alerts": {
+            "max_level": _max_alert_level(alerts),
+            "signature": _alert_signature(alerts),
+        },
+        "context_hash": _clinical_context_hash(prompt_context),
+    }
+    serialized = json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=True)
+    return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
+
+
+def _build_explanatory_score(
+    last_vitals: dict[str, Any],
+    alerts: list[dict[str, Any]],
+    history_points: list[dict[str, Any]],
+    *,
+    questionnaire: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    score = 0
+    reasons: list[tuple[int, str]] = []
+
+    def add(points: int, reason: str) -> None:
+        nonlocal score
+        score += points
+        reasons.append((points, reason))
+
+    hr = float(last_vitals.get("hr", 0) or 0)
+    spo2 = float(last_vitals.get("spo2", 0) or 0)
+    map_value = float(last_vitals.get("map", 0) or 0)
+    rr = float(last_vitals.get("rr", 0) or 0)
+    temp = float(last_vitals.get("temp", 0) or 0)
+    shock_index = float(last_vitals.get("shock_index", 0) or 0)
+    hr_delta = _history_delta(history_points, "hr", hr)
+    spo2_delta = _history_delta(history_points, "spo2", spo2)
+    map_delta = _history_delta(history_points, "map", map_value)
+    rr_delta = _history_delta(history_points, "rr", rr)
+    temp_delta = _history_delta(history_points, "temp", temp)
+
+    max_alert = _max_alert_level(alerts)
+    if max_alert == "CRITICAL":
+        add(35, "Alerte critique active")
+    elif max_alert == "WARNING":
+        add(18, "Alerte warning active")
+    elif max_alert == "INFO":
+        add(6, "Alerte informative active")
+
+    if spo2 < 92:
+        add(18, f"SpO2 basse a {int(spo2)}%")
+    elif spo2 < 95:
+        add(10, f"SpO2 limite a {int(spo2)}%")
+    if rr >= 24:
+        add(12, f"FR elevee a {int(rr)}/min")
+    elif rr >= 22:
+        add(8, f"FR acceleree a {int(rr)}/min")
+    if temp >= 39.0 or temp <= 35.5:
+        add(14, f"Temperature tres anormale a {temp:.1f} C")
+    elif temp >= 38.0 or temp <= 36.0:
+        add(10, f"Temperature anormale a {temp:.1f} C")
+    if map_value < 70:
+        add(18, f"TAM basse a {int(round(map_value))} mmHg")
+    elif map_value < 80:
+        add(8, f"TAM limite a {int(round(map_value))} mmHg")
+    if shock_index >= 1.0:
+        add(15, f"Shock index eleve a {shock_index:.2f}")
+    elif shock_index >= 0.9:
+        add(10, f"Shock index augmente a {shock_index:.2f}")
+    if hr >= 120:
+        add(10, f"FC elevee a {int(hr)} bpm")
+    elif hr >= 105:
+        add(6, f"FC acceleree a {int(hr)} bpm")
+
+    if spo2_delta <= -3:
+        add(10, f"SpO2 en baisse de {int(round(spo2_delta))} points depuis J0")
+    if map_delta <= -8:
+        add(10, f"TAM en baisse de {int(round(map_delta))} points depuis J0")
+    if hr_delta >= 15:
+        add(8, f"FC en hausse de {int(round(hr_delta))} bpm depuis J0")
+    if rr_delta >= 4:
+        add(7, f"FR en hausse de {int(round(rr_delta))}/min depuis J0")
+    if abs(temp_delta) >= 0.5:
+        add(8, f"Temperature en derive de {temp_delta:+.1f} C depuis J0")
+
+    for hint in sorted(_iter_questionnaire_hints(questionnaire), key=lambda item: item["weight"], reverse=True)[:2]:
+        if hint["against"]:
+            continue
+        add(min(6, hint["weight"] * 2), f"Questionnaire: {hint['reason']}")
+
+    score = max(0, min(score, 100))
+    if score >= 75:
+        level = "critical"
+    elif score >= 50:
+        level = "high"
+    elif score >= 25:
+        level = "medium"
+    else:
+        level = "low"
+    reasons.sort(key=lambda item: item[0], reverse=True)
+    return {
+        "score": score,
+        "level": level,
+        "reasons": [reason for _, reason in reasons[:5]] or ["Pas de signal majeur automatique."],
+    }
+
+
+def _summary_from_clinical_package(
+    package_payload: dict[str, Any],
+    *,
+    patient: dict[str, Any],
+    last_vitals: dict[str, Any],
+    surgery_type: str,
+) -> str:
+    summary = str(package_payload.get("handoff_summary") or "").strip()
+    if summary:
+        return summary
+    leading_hypothesis = ""
+    ranking = package_payload.get("hypothesis_ranking") or []
+    if isinstance(ranking, list) and ranking:
+        leading_hypothesis = str(ranking[0].get("label") or "").strip()
+    synthesis = str(package_payload.get("structured_synthesis") or "").strip()
+    if leading_hypothesis:
+        return (
+            f"{patient['id']} J+{last_vitals.get('postop_day', patient['postop_day'])} apres {surgery_type}. "
+            f"Hypothese dominante: {leading_hypothesis}. {synthesis}"
+        ).strip()
+    return synthesis or (
+        f"{patient['id']} J+{last_vitals.get('postop_day', patient['postop_day'])} apres {surgery_type}. "
+        f"Analyse disponible sans resume detaille."
+    )
+
+
+def _analysis_state_payload(
+    *,
+    mode: str,
+    cache_status: str,
+    generated_at: str | None,
+    delta_signals: list[str],
+    trigger_reason: str,
+    anchor_vitals: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "mode": mode if mode in ANALYSIS_STATE_LEVELS else "active",
+        "cache_status": cache_status if cache_status in {"fresh", "cached", "stale"} else "cached",
+        "generated_at": generated_at,
+        "submitted_at": generated_at if mode in {"resting", "stale"} else None,
+        "delta_signals": delta_signals,
+        "trigger_reason": trigger_reason,
+        "anchor_vitals": anchor_vitals,
+    }
+
+
+def _merge_priority_level(level_a: str, level_b: str) -> str:
+    return level_a if PRIORITY_LEVELS.get(level_a, 0) >= PRIORITY_LEVELS.get(level_b, 0) else level_b
+
+
+def _snapshot_priority_score(snapshot: dict[str, Any]) -> tuple[int, list[str]]:
+    last_vitals = snapshot.get("last_vitals", {})
+    levels = [str(level).upper() for level in snapshot.get("alert_levels", [])]
+    score = 0
+    reasons: list[str] = []
+
+    def add(points: int, reason: str) -> None:
+        nonlocal score
+        score += points
+        reasons.append(reason)
+
+    if "CRITICAL" in levels:
+        add(40, "alerte critique")
+    elif "WARNING" in levels:
+        add(18, "alerte warning")
+    if float(last_vitals.get("spo2") or 100) < 92:
+        add(18, f"SpO2 {last_vitals.get('spo2')}%")
+    elif float(last_vitals.get("spo2") or 100) < 95:
+        add(10, f"SpO2 {last_vitals.get('spo2')}%")
+    if float(last_vitals.get("map") or 999) < 70:
+        add(18, f"TAM {last_vitals.get('map')}")
+    elif float(last_vitals.get("map") or 999) < 80:
+        add(8, f"TAM {last_vitals.get('map')}")
+    if float(last_vitals.get("rr") or 0) >= 24:
+        add(12, f"FR {last_vitals.get('rr')}")
+    elif float(last_vitals.get("rr") or 0) >= 22:
+        add(8, f"FR {last_vitals.get('rr')}")
+    if float(last_vitals.get("temp") or 0) >= 39.0 or float(last_vitals.get("temp") or 99) <= 35.5:
+        add(12, f"T {last_vitals.get('temp')}")
+    elif float(last_vitals.get("temp") or 0) >= 38.0 or float(last_vitals.get("temp") or 99) <= 36.0:
+        add(8, f"T {last_vitals.get('temp')}")
+    if float(last_vitals.get("shock_index") or 0) >= 0.9:
+        add(10, f"shock index {last_vitals.get('shock_index')}")
+    if float(last_vitals.get("hr") or 0) >= 120:
+        add(8, f"FC {last_vitals.get('hr')}")
+
+    return score, reasons[:4]
+
+
+def _cached_analysis_response(
+    cache_row: dict[str, Any],
+    *,
+    mode: str,
+    cache_status: str,
+    delta_signals: list[str],
+    trigger_reason: str,
+) -> ClinicalPackageResponse:
+    payload = dict(cache_row.get("payload") or {})
+    response_payload = {
+        "source": cache_row.get("source", "rule-based"),
+        "llm_status": cache_row.get("llm_status", "rule-based"),
+        **payload,
+        "summary_text": cache_row.get("summary_text", ""),
+        "analysis_state": _analysis_state_payload(
+            mode=mode,
+            cache_status=cache_status,
+            generated_at=cache_row.get("generated_at"),
+            delta_signals=delta_signals,
+            trigger_reason=trigger_reason,
+            anchor_vitals=cache_row.get("anchor_vitals"),
+        ),
+        "questionnaire_state": _normalize_questionnaire_state(cache_row.get("questionnaire")),
+    }
+    return ClinicalPackageResponse.model_validate(response_payload)
+
+
+async def resolve_patient_analysis(
+    patient_id: str,
+    request: Request,
+    payload: ClinicalContextPayload,
+    *,
+    force: bool = False,
+) -> ClinicalPackageResponse:
+    services, patient, last_vitals, _scenario, surgery_type, alerts, history_points = _load_patient_bundle(
+        patient_id,
+        request,
+        restrict_to_scenario=False,
+    )
+    raw_context = payload.as_prompt_dict()
+    prompt_context = _prompt_context_from_payload(services, payload)
+    questionnaire_state = _normalize_questionnaire_state(raw_context.get("questionnaire"))
+    fingerprint = _analysis_fingerprint(
+        surgery_type=surgery_type,
+        postop_day=int(last_vitals.get("postop_day", patient["postop_day"])),
+        last_vitals=last_vitals,
+        alerts=alerts,
+        history_points=history_points,
+        prompt_context=prompt_context,
+    )
+    cache_row = services.postgres.get_analysis_cache(patient_id, ANALYSIS_CACHE_TYPE)
+
+    if cache_row and not force:
+        current_mode = str(cache_row.get("analysis_state") or "active")
+        current_trigger = str(cache_row.get("trigger_reason") or "")
+        current_delta = list(cache_row.get("delta_signals") or [])
+        if current_mode in {"resting", "stale"}:
+            backend_delta = _detect_backend_delta(cache_row.get("anchor_vitals"), last_vitals, alerts)
+            if backend_delta:
+                if current_mode != "stale" or backend_delta != current_delta:
+                    updated_row = services.postgres.update_analysis_cache_state(
+                        patient_id=patient_id,
+                        analysis_type=ANALYSIS_CACHE_TYPE,
+                        analysis_state="stale",
+                        delta_signals=backend_delta,
+                        trigger_reason="Derive clinique au-dela du delta trigger",
+                    )
+                    if updated_row:
+                        cache_row = updated_row
+                return _cached_analysis_response(
+                    cache_row,
+                    mode="stale",
+                    cache_status="stale",
+                    delta_signals=backend_delta,
+                    trigger_reason="Derive clinique au-dela du delta trigger",
+                )
+            return _cached_analysis_response(
+                cache_row,
+                mode=current_mode,
+                cache_status="stale" if current_mode == "stale" else "cached",
+                delta_signals=current_delta,
+                trigger_reason=current_trigger,
+            )
+        if str(cache_row.get("fingerprint") or "") == fingerprint:
+            return _cached_analysis_response(
+                cache_row,
+                mode="active",
+                cache_status="cached",
+                delta_signals=[],
+                trigger_reason=current_trigger,
+            )
+
+    prompt = build_clinical_package_prompt(
+        patient,
+        last_vitals,
+        alerts,
+        history_points,
+        schema=CLINICAL_PACKAGE_SCHEMA,
+        clinical_context=prompt_context,
+        knowledge_excerpt=services.knowledge_base.get_excerpt("clinical_package"),
+    )
+    structured = await services.llm_client.generate_structured(
+        prompt,
+        CLINICAL_PACKAGE_SCHEMA,
+        system=CLINICAL_PACKAGE_SYSTEM_PROMPT,
+    )
+    source = "ollama"
+    llm_status = "ollama"
+    package_payload: dict[str, Any] | None = None
+    if structured:
+        try:
+            package_payload = _normalize_clinical_package(structured, patient_id=patient_id)
+        except Exception:
+            package_payload = None
+    if package_payload is None:
+        source = "rule-based"
+        llm_status = "llm-unavailable" if services.settings.enable_llm else "disabled"
+        package_payload = _fallback_clinical_package(
+            patient,
+            last_vitals,
+            alerts,
+            history_points,
+            surgery_type,
+            questionnaire=prompt_context.get("questionnaire"),
+        )
+
+    summary_text = _summary_from_clinical_package(
+        package_payload,
+        patient=patient,
+        last_vitals=last_vitals,
+        surgery_type=surgery_type,
+    )
+    explanatory_score = _build_explanatory_score(
+        last_vitals,
+        alerts,
+        history_points,
+        questionnaire=prompt_context.get("questionnaire"),
+    )
+    base_payload = {
+        **package_payload,
+        "summary_text": summary_text,
+        "explanatory_score": explanatory_score,
+    }
+
+    next_mode = "resting" if questionnaire_state else "active"
+    anchor_vitals = _analysis_anchor(last_vitals, alerts) if next_mode == "resting" else None
+    trigger_reason = (
+        "Questionnaire valide, analyse mise au repos"
+        if next_mode == "resting"
+        else "Analyse clinique actualisee"
+    )
+    cache_row = services.postgres.upsert_analysis_cache(
+        patient_id=patient_id,
+        analysis_type=ANALYSIS_CACHE_TYPE,
+        fingerprint=fingerprint,
+        payload=base_payload,
+        summary_text=summary_text,
+        questionnaire=questionnaire_state,
+        analysis_state=next_mode,
+        anchor_vitals=anchor_vitals,
+        delta_signals=[],
+        trigger_reason=trigger_reason,
+        source=source,
+        llm_status=llm_status,
+    )
+    services.postgres.store_note(patient_id=patient_id, content=summary_text, source=source)
+    return ClinicalPackageResponse.model_validate(
+        {
+            "source": source,
+            "llm_status": llm_status,
+            **base_payload,
+            "analysis_state": _analysis_state_payload(
+                mode=next_mode,
+                cache_status="fresh",
+                generated_at=cache_row.get("generated_at"),
+                delta_signals=[],
+                trigger_reason=trigger_reason,
+                anchor_vitals=anchor_vitals,
+            ),
+            "questionnaire_state": questionnaire_state,
+        }
+    )
+
+
 @router.get("/{patient_id}/scenario-review")
 async def scenario_review(patient_id: str, request: Request):
     return await _scenario_review_with_context(patient_id, request, ClinicalContextPayload())
@@ -258,13 +838,14 @@ async def _scenario_review_with_context(
         request,
         restrict_to_scenario=True,
     )
+    prompt_context = _prompt_context_from_payload(services, payload)
     prompt = build_scenario_review_prompt(
         patient,
         last_vitals,
         alerts,
         recent_points,
         schema=SCENARIO_REVIEW_SCHEMA,
-        clinical_context=_prompt_context_from_payload(services, payload),
+        clinical_context=prompt_context,
         knowledge_excerpt=services.knowledge_base.get_excerpt("scenario_review"),
     )
     structured = await services.llm_client.generate_structured(
@@ -282,14 +863,14 @@ async def _scenario_review_with_context(
             return ScenarioReviewResponse.model_validate({"source": "ollama", "llm_status": "ollama", **normalized})
         except Exception:
             pass
-    fallback = _fallback_review(patient, last_vitals, alerts)
+    fallback = _fallback_review(patient, last_vitals, alerts, questionnaire=prompt_context.get("questionnaire"))
     fallback["llm_status"] = "llm-unavailable" if services.settings.enable_llm else "disabled"
     return ScenarioReviewResponse.model_validate(fallback)
 
 
 @router.get("/{patient_id}/clinical-package")
 async def clinical_package(patient_id: str, request: Request):
-    return await _clinical_package_with_context(patient_id, request, ClinicalContextPayload())
+    return await resolve_patient_analysis(patient_id, request, ClinicalContextPayload(), force=False)
 
 
 @router.post("/{patient_id}/clinical-package")
@@ -298,47 +879,7 @@ async def clinical_package_with_context(
     payload: ClinicalContextPayload,
     request: Request,
 ):
-    return await _clinical_package_with_context(patient_id, request, payload)
-
-
-async def _clinical_package_with_context(
-    patient_id: str,
-    request: Request,
-    payload: ClinicalContextPayload,
-):
-    services, patient, last_vitals, scenario, surgery_type, alerts, history_points = _load_patient_bundle(
-        patient_id,
-        request,
-        restrict_to_scenario=False,
-    )
-    prompt = build_clinical_package_prompt(
-        patient,
-        last_vitals,
-        alerts,
-        history_points,
-        schema=CLINICAL_PACKAGE_SCHEMA,
-        clinical_context=_prompt_context_from_payload(services, payload),
-        knowledge_excerpt=services.knowledge_base.get_excerpt("clinical_package"),
-    )
-    structured = await services.llm_client.generate_structured(
-        prompt,
-        CLINICAL_PACKAGE_SCHEMA,
-        system=CLINICAL_PACKAGE_SYSTEM_PROMPT,
-    )
-    if structured:
-        try:
-            normalized = _normalize_clinical_package(structured, patient_id=patient_id)
-            return ClinicalPackageResponse.model_validate({"source": "ollama", "llm_status": "ollama", **normalized})
-        except Exception:
-            pass
-    fallback = _fallback_clinical_package(patient, last_vitals, alerts, history_points, surgery_type)
-    return ClinicalPackageResponse.model_validate(
-        {
-            "source": "rule-based",
-            "llm_status": "llm-unavailable" if services.settings.enable_llm else "disabled",
-            **fallback,
-        }
-    )
+    return await resolve_patient_analysis(patient_id, request, payload, force=True)
 
 
 @router.get("/prioritize/patients")
@@ -470,6 +1011,59 @@ def _normalize_structured_review(
     }
 
 
+def _normalized_percentages(weights: list[float]) -> list[int]:
+    if not weights:
+        return []
+    positive_weights = [max(0.0, float(weight)) for weight in weights]
+    total = sum(positive_weights)
+    if total <= 0:
+        positive_weights = [1.0] + [0.0 for _ in positive_weights[1:]]
+        total = 1.0
+    raw_values = [(weight / total) * 100.0 for weight in positive_weights]
+    rounded = [int(value) for value in raw_values]
+    remainder = 100 - sum(rounded)
+    priority = sorted(
+        range(len(raw_values)),
+        key=lambda index: (raw_values[index] - rounded[index], positive_weights[index], -index),
+        reverse=True,
+    )
+    for index in priority[:remainder]:
+        rounded[index] += 1
+    return rounded
+
+
+def _heuristic_hypothesis_weights(rows: list[dict[str, Any]]) -> list[float]:
+    compatibility_weights = {"high": 5.0, "medium": 3.0, "low": 1.5}
+    return [
+        max(0.5, compatibility_weights.get(str(row.get("compatibility") or "low"), 1.5) - (index * 0.35))
+        for index, row in enumerate(rows)
+    ]
+
+
+def _attach_hypothesis_percentages(
+    rows: list[dict[str, Any]],
+    *,
+    score_field: str | None = None,
+) -> list[dict[str, Any]]:
+    if not rows:
+        return rows
+    if score_field:
+        weights = [max(0.0, float(row.get(score_field) or 0.0)) for row in rows]
+    else:
+        explicit_percent = [row.get("compatibility_percent") for row in rows]
+        if any(value is not None for value in explicit_percent):
+            weights = [max(0.0, float(value or 0.0)) for value in explicit_percent]
+        else:
+            weights = _heuristic_hypothesis_weights(rows)
+    percentages = _normalized_percentages(weights)
+    annotated: list[dict[str, Any]] = []
+    for row, percent in zip(rows, percentages):
+        next_row = dict(row)
+        next_row["compatibility_percent"] = int(percent)
+        annotated.append(next_row)
+    return annotated
+
+
 def _normalize_clinical_package(payload: dict, *, patient_id: str) -> dict:
     def _string_list(value: object, fallback: list[str]) -> list[str]:
         if not isinstance(value, list):
@@ -491,11 +1085,12 @@ def _normalize_clinical_package(payload: dict, *, patient_id: str) -> dict:
                 {
                     "label": str(row.get("label", "Hypothese non precisee")).strip() or "Hypothese non precisee",
                     "compatibility": compatibility,
+                    "compatibility_percent": row.get("compatibility_percent"),
                     "arguments_for": _string_list(row.get("arguments_for"), ["argument non detaille"]),
                     "arguments_against": _string_list(row.get("arguments_against"), ["pas d'element contradictoire majeur"]),
                 }
             )
-        return normalized[:3]
+        return _attach_hypothesis_percentages(normalized[:3])
 
     trajectory_status = str(payload.get("trajectory_status", "stable")).strip().lower()
     if trajectory_status not in {"stable", "worsening", "switching", "recovering"}:
@@ -524,6 +1119,15 @@ def _normalize_clinical_package(payload: dict, *, patient_id: str) -> dict:
 
 def _normalize_prioritization(payload: dict, snapshots: list[dict]) -> list[dict]:
     valid_ids = {snapshot["patient_id"] for snapshot in snapshots}
+    heuristic_levels: dict[str, str] = {}
+    for snapshot in snapshots:
+        score, _reasons = _snapshot_priority_score(snapshot)
+        if score >= 50:
+            heuristic_levels[snapshot["patient_id"]] = "high"
+        elif score >= 20:
+            heuristic_levels[snapshot["patient_id"]] = "medium"
+        else:
+            heuristic_levels[snapshot["patient_id"]] = "low"
     rows = payload.get("prioritized_patients")
     if not isinstance(rows, list):
         return []
@@ -538,6 +1142,7 @@ def _normalize_prioritization(payload: dict, snapshots: list[dict]) -> list[dict
         priority_level = str(row.get("priority_level", "low")).strip().lower()
         if priority_level not in {"high", "medium", "low"}:
             priority_level = "low"
+        priority_level = _merge_priority_level(priority_level, heuristic_levels.get(patient_id, "low"))
         normalized.append(
             {
                 "patient_id": patient_id,
@@ -691,10 +1296,51 @@ def _temporal_profile(history_points: list[dict]) -> dict[str, Any]:
     return profile
 
 
+def _iter_questionnaire_hints(questionnaire: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(questionnaire, dict):
+        return []
+
+    raw_hints = questionnaire.get("differential_hints") or []
+    if not isinstance(raw_hints, list):
+        return []
+
+    hints: list[dict[str, Any]] = []
+    for hint in raw_hints:
+        if not isinstance(hint, dict):
+            continue
+        label = str(hint.get("label") or "").strip()
+        reason = str(hint.get("reason") or "").strip()
+        if not label or not reason:
+            continue
+        try:
+            weight = int(hint.get("weight", 1))
+        except (TypeError, ValueError):
+            weight = 1
+        hints.append(
+            {
+                "label": label,
+                "reason": reason,
+                "weight": max(1, min(weight, 4)),
+                "against": bool(hint.get("against")),
+            }
+        )
+    return hints
+
+
+def _questionnaire_takeaway(questionnaire: dict[str, Any] | None) -> str:
+    positives = [hint for hint in _iter_questionnaire_hints(questionnaire) if not hint["against"]]
+    if not positives:
+        return ""
+    strongest = max(positives, key=lambda hint: hint["weight"])
+    return f"Le questionnaire differentiel renforce surtout: {strongest['reason']}"
+
+
 def _objective_hypothesis_rows(
     last_vitals: dict,
     alerts: list[dict],
     history_points: list[dict],
+    *,
+    questionnaire: dict[str, Any] | None = None,
 ) -> list[dict]:
     hr = float(last_vitals.get("hr", 0))
     spo2 = float(last_vitals.get("spo2", 0))
@@ -764,6 +1410,13 @@ def _objective_hypothesis_rows(
                     candidate["for"].append(reason)
                 return
 
+    def penalize(label: str, points: int, reason: str) -> None:
+        for candidate in candidates:
+            if candidate["label"] == label:
+                candidate["score"] = max(0, candidate["score"] - points)
+                candidate["against"].append(reason)
+                return
+
     if spo2 < 94:
         add("Complication respiratoire post-op (pneumopathie / IRA)", 2, f"SpO2 basse a {int(spo2)}%.")
         add("Embolie pulmonaire possible", 2, f"SpO2 basse a {int(spo2)}%.")
@@ -794,9 +1447,37 @@ def _objective_hypothesis_rows(
         add("Embolie pulmonaire possible", 2, f"SpO2 en baisse de {int(round(spo2_delta))} points depuis J0.")
     if temp_delta >= 0.5:
         add("Sepsis / complication infectieuse possible", 2, f"Temperature en hausse de {temp_delta:.1f} C depuis J0.")
+    if temp_delta >= 0.4 and (hr_delta >= 10 or rr_delta >= 4):
+        add(
+            "Sepsis / complication infectieuse possible",
+            2,
+            "Derive thermique moderee associee a une hausse de FC ou FR depuis J0.",
+        )
     if hr_delta >= 15 and map_delta <= -8:
         add("Hemorragie / hypovolemie possible", 3, f"FC {int(round(hr_delta)):+d} bpm et TAM {int(round(map_delta)):+d} depuis J0.")
-    if hr_delta >= 8 and 36.0 < temp < 38.0 and spo2 >= 95 and map_value >= 85:
+    if hr_delta >= 10 and map_delta <= -5 and spo2 >= 95 and temp < 38.0:
+        add(
+            "Hemorragie / hypovolemie possible",
+            2,
+            "Compensation discrete avec FC en hausse et TAM en baisse depuis J0.",
+        )
+    if shock_index >= 0.82 and (map_delta <= -4 or hr_delta >= 10) and spo2 >= 95 and temp < 38.0:
+        add(
+            "Hemorragie / hypovolemie possible",
+            1,
+            f"Shock index deja tendu a {shock_index:.2f} sur fond de derive hemodynamique discrete.",
+        )
+    if (
+        hr_delta >= 8
+        and rr <= 22
+        and 36.0 < temp < 37.8
+        and temp_delta < 0.4
+        and spo2 >= 96
+        and spo2_delta > -2
+        and map_value >= 85
+        and map_delta > -5
+        and shock_index < 0.85
+    ):
         add("Douleur post-op non controlee possible", 3, "Reponse sympathique sans hypoxemie ni fievre majeure.")
     if map_delta <= -8 and temp < 38.0:
         add("Complication cardiaque post-op possible", 2, f"TAM en baisse de {int(round(map_delta))} mmHg sans syndrome febrile majeur.")
@@ -991,13 +1672,33 @@ def _objective_hypothesis_rows(
             3,
             "Desaturation progressive avec fievre et polypnee, profil respiratoire infectieux plausible.",
         )
+        if map_value >= 82 and map_delta > -8 and sbp >= 110:
+            add(
+                "Complication respiratoire post-op (pneumopathie / IRA)",
+                4,
+                "Le retentissement hemodynamique reste limite malgre un tableau respiratoire progressif, ce qui soutient d'abord une cause respiratoire infectieuse.",
+            )
+            add(
+                "Sepsis / complication infectieuse possible",
+                0,
+                "Le retentissement hemodynamique reste encore limite pour un sepsis deja au premier plan.",
+                against=True,
+            )
         add(
             "Embolie pulmonaire possible",
             0,
             "La progression et la fievre rendent une EP isolee moins specifique.",
             against=True,
         )
-    if temp >= 38.0 and temporal["progressive"] and (temporal["fever_first"] or map_delta <= -5 or map_value < 75):
+    if (
+        temp >= 38.0
+        and temporal["progressive"]
+        and (
+            map_delta <= -8
+            or map_value < 78
+            or (temporal["fever_first"] and (map_value < 80 or map_delta <= -10))
+        )
+    ):
         add(
             "Sepsis / complication infectieuse possible",
             4,
@@ -1078,6 +1779,13 @@ def _objective_hypothesis_rows(
             against=True,
         )
 
+    for hint in _iter_questionnaire_hints(questionnaire):
+        reason = f"Questionnaire: {hint['reason']}"
+        if hint["against"]:
+            penalize(hint["label"], hint["weight"], reason)
+        else:
+            add(hint["label"], hint["weight"], reason)
+
     def compatibility(score: int) -> str:
         if score >= 6:
             return "high"
@@ -1107,10 +1815,17 @@ def _objective_hypothesis_rows(
                 "score": 1,
             }
         ]
-    return [{key: value for key, value in row.items() if key != "score"} for row in rows[:3]]
+    top_rows = _attach_hypothesis_percentages(rows[:3], score_field="score")
+    return [{key: value for key, value in row.items() if key != "score"} for row in top_rows]
 
 
-def _fallback_review(patient: dict, last_vitals: dict, alerts: list[dict]) -> dict:
+def _fallback_review(
+    patient: dict,
+    last_vitals: dict,
+    alerts: list[dict],
+    *,
+    questionnaire: dict[str, Any] | None = None,
+) -> dict:
     scenario = _current_scenario_name(last_vitals, patient)
     surgery_type = last_vitals.get("surgery_type", patient["surgery_type"])
     supporting_signals: list[str] = []
@@ -1143,6 +1858,13 @@ def _fallback_review(patient: dict, last_vitals: dict, alerts: list[dict]) -> di
         contradicting_signals.append(f"hemodynamique encore compensee avec TAM {map_value}")
     if 36.0 < temp < 38.0:
         contradicting_signals.append(f"temperature sans anomalie majeure a {temp:.1f} C")
+
+    for hint in sorted(_iter_questionnaire_hints(questionnaire), key=lambda row: row["weight"], reverse=True)[:4]:
+        signal = f"questionnaire: {hint['reason']}"
+        if hint["against"]:
+            contradicting_signals.append(signal)
+        else:
+            supporting_signals.append(signal)
 
     if "pneumopathie" in scenario.lower() or "ira" in scenario.lower():
         alternatives = ["embolie pulmonaire", "hypoventilation post-op"]
@@ -1196,13 +1918,21 @@ def _fallback_clinical_package(
     alerts: list[dict],
     history_points: list[dict],
     surgery_type: str,
+    *,
+    questionnaire: dict[str, Any] | None = None,
 ) -> dict:
-    hypothesis_rows = _objective_hypothesis_rows(last_vitals, alerts, history_points)
+    hypothesis_rows = _objective_hypothesis_rows(
+        last_vitals,
+        alerts,
+        history_points,
+        questionnaire=questionnaire,
+    )
     hr = float(last_vitals.get("hr", 0))
     spo2 = float(last_vitals.get("spo2", 0))
     rr = float(last_vitals.get("rr", 0))
     temp = float(last_vitals.get("temp", 0))
     map_value = int(round(float(last_vitals.get("map", 0))))
+    questionnaire_takeaway = _questionnaire_takeaway(questionnaire)
     trajectory_status = "stable"
     trajectory_explanation = "Pas d'aggravation nette detectee."
     if len(history_points) >= 2:
@@ -1245,6 +1975,7 @@ def _fallback_clinical_package(
         "structured_synthesis": (
             f"{patient['id']} apres {surgery_type}: tableau possible compatible avec {leading_hypothesis}, "
             f"avec FC {int(hr)} bpm, SpO2 {int(spo2)}%, TAM {map_value}, FR {int(rr)}/min, T C {temp:.1f}."
+            f"{' ' + questionnaire_takeaway if questionnaire_takeaway else ''}"
         ),
         "alert_explanations": alert_explanations,
         "hypothesis_ranking": hypothesis_rows[:3],
@@ -1254,37 +1985,27 @@ def _fallback_clinical_package(
         "handoff_summary": (
             f"{patient['id']} J{last_vitals.get('postop_day', patient['postop_day'])} apres {surgery_type}, "
             f"hypothese dominante {leading_hypothesis}, alertes {len(alerts)}, surveillance actuelle a poursuivre."
+            f"{' ' + questionnaire_takeaway if questionnaire_takeaway else ''}"
         ),
-        "scenario_consistency": "Le tableau clinique observe reste compatible avec l'hypothese principale proposee, sans acces au scenario simule interne.",
+        "scenario_consistency": (
+            "Le tableau clinique observe reste compatible avec l'hypothese principale proposee, sans acces au scenario simule interne."
+            f"{' ' + questionnaire_takeaway if questionnaire_takeaway else ''}"
+        ),
     }
 
 
 def _fallback_prioritization(snapshots: list[dict]) -> list[dict]:
     scored: list[dict] = []
     for snapshot in snapshots:
+        score, reasons = _snapshot_priority_score(snapshot)
         last_vitals = snapshot.get("last_vitals", {})
-        levels = snapshot.get("alert_levels", [])
-        score = 0
-        if "CRITICAL" in levels:
-            score += 50
-        if "WARNING" in levels:
-            score += 20
-        if float(last_vitals.get("spo2") or 100) < 92:
-            score += 20
-        if float(last_vitals.get("map") or 999) < 70:
-            score += 20
-        if float(last_vitals.get("rr") or 0) >= 22:
-            score += 10
-        if float(last_vitals.get("temp") or 0) >= 38.0 or float(last_vitals.get("temp") or 99) <= 36.0:
-            score += 8
-        if float(last_vitals.get("shock_index") or 0) >= 0.9:
-            score += 10
         scored.append(
             {
                 "patient_id": snapshot["patient_id"],
                 "score": score,
-                "reason": (
-                    f"Alertes {levels or ['aucune']}, SpO2 {last_vitals.get('spo2')}, "
+                "reason": "; ".join(reasons)
+                or (
+                    f"Alertes {snapshot.get('alert_levels') or ['aucune']}, SpO2 {last_vitals.get('spo2')}, "
                     f"TAM {last_vitals.get('map')}, FR {last_vitals.get('rr')}, T C {last_vitals.get('temp')}."
                 ),
             }

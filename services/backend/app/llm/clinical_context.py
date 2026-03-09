@@ -18,7 +18,6 @@ class QuestionnaireResponsePayload(BaseModel):
 class ClinicalContextPayload(BaseModel):
     patient_factors: list[str] = Field(default_factory=list)
     perioperative_context: list[str] = Field(default_factory=list)
-    complications_to_discuss: list[str] = Field(default_factory=list)
     free_text: str = ""
     questionnaire: QuestionnaireResponsePayload | None = None
 
@@ -26,9 +25,6 @@ class ClinicalContextPayload(BaseModel):
         return {
             "patient_factors": [item.strip() for item in self.patient_factors if item.strip()],
             "perioperative_context": [item.strip() for item in self.perioperative_context if item.strip()],
-            "complications_to_discuss": [
-                item.strip() for item in self.complications_to_discuss if item.strip()
-            ],
             "free_text": self.free_text.strip(),
             "questionnaire": self.questionnaire.model_dump() if self.questionnaire else None,
         }

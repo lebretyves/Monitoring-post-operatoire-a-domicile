@@ -52,6 +52,33 @@ class PostgresStorage:
                 ON notifications (status)
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS llm_analysis_cache (
+                    patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+                    analysis_type TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    summary_text TEXT NOT NULL DEFAULT '',
+                    questionnaire_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    analysis_state TEXT NOT NULL DEFAULT 'active',
+                    anchor_vitals JSONB,
+                    delta_signals JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    trigger_reason TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT 'rule-based',
+                    llm_status TEXT NOT NULL DEFAULT 'rule-based',
+                    generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (patient_id, analysis_type)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_llm_analysis_cache_updated_at
+                ON llm_analysis_cache (updated_at DESC)
+                """
+            )
             conn.commit()
 
     def close(self) -> None:
@@ -321,6 +348,183 @@ class PostgresStorage:
             )
             conn.commit()
 
+    def get_analysis_cache(self, patient_id: str, analysis_type: str) -> dict[str, Any] | None:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    patient_id,
+                    analysis_type,
+                    fingerprint,
+                    payload,
+                    summary_text,
+                    questionnaire_json,
+                    analysis_state,
+                    anchor_vitals,
+                    delta_signals,
+                    trigger_reason,
+                    source,
+                    llm_status,
+                    generated_at,
+                    updated_at
+                FROM llm_analysis_cache
+                WHERE patient_id = %s AND analysis_type = %s
+                """,
+                (patient_id, analysis_type),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return self._hydrate_analysis_cache_row(row)
+
+    def upsert_analysis_cache(
+        self,
+        *,
+        patient_id: str,
+        analysis_type: str,
+        fingerprint: str,
+        payload: dict[str, Any],
+        summary_text: str,
+        questionnaire: dict[str, Any] | None,
+        analysis_state: str,
+        anchor_vitals: dict[str, Any] | None,
+        delta_signals: list[str],
+        trigger_reason: str,
+        source: str,
+        llm_status: str,
+    ) -> dict[str, Any]:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO llm_analysis_cache (
+                    patient_id,
+                    analysis_type,
+                    fingerprint,
+                    payload,
+                    summary_text,
+                    questionnaire_json,
+                    analysis_state,
+                    anchor_vitals,
+                    delta_signals,
+                    trigger_reason,
+                    source,
+                    llm_status,
+                    generated_at,
+                    updated_at
+                )
+                VALUES (
+                    %s, %s, %s, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s, %s, %s, NOW(), NOW()
+                )
+                ON CONFLICT (patient_id, analysis_type) DO UPDATE SET
+                    fingerprint = EXCLUDED.fingerprint,
+                    payload = EXCLUDED.payload,
+                    summary_text = EXCLUDED.summary_text,
+                    questionnaire_json = EXCLUDED.questionnaire_json,
+                    analysis_state = EXCLUDED.analysis_state,
+                    anchor_vitals = EXCLUDED.anchor_vitals,
+                    delta_signals = EXCLUDED.delta_signals,
+                    trigger_reason = EXCLUDED.trigger_reason,
+                    source = EXCLUDED.source,
+                    llm_status = EXCLUDED.llm_status,
+                    generated_at = NOW(),
+                    updated_at = NOW()
+                RETURNING
+                    patient_id,
+                    analysis_type,
+                    fingerprint,
+                    payload,
+                    summary_text,
+                    questionnaire_json,
+                    analysis_state,
+                    anchor_vitals,
+                    delta_signals,
+                    trigger_reason,
+                    source,
+                    llm_status,
+                    generated_at,
+                    updated_at
+                """,
+                (
+                    patient_id,
+                    analysis_type,
+                    fingerprint,
+                    json.dumps(payload),
+                    summary_text,
+                    json.dumps(questionnaire or {}),
+                    analysis_state,
+                    json.dumps(anchor_vitals) if anchor_vitals is not None else None,
+                    json.dumps(delta_signals),
+                    trigger_reason,
+                    source,
+                    llm_status,
+                ),
+            )
+            row = cur.fetchone()
+            conn.commit()
+        return self._hydrate_analysis_cache_row(row)
+
+    def update_analysis_cache_state(
+        self,
+        *,
+        patient_id: str,
+        analysis_type: str,
+        analysis_state: str,
+        delta_signals: list[str],
+        trigger_reason: str,
+        anchor_vitals: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE llm_analysis_cache
+                SET analysis_state = %s,
+                    delta_signals = %s::jsonb,
+                    trigger_reason = %s,
+                    anchor_vitals = COALESCE(%s::jsonb, anchor_vitals),
+                    updated_at = NOW()
+                WHERE patient_id = %s AND analysis_type = %s
+                RETURNING
+                    patient_id,
+                    analysis_type,
+                    fingerprint,
+                    payload,
+                    summary_text,
+                    questionnaire_json,
+                    analysis_state,
+                    anchor_vitals,
+                    delta_signals,
+                    trigger_reason,
+                    source,
+                    llm_status,
+                    generated_at,
+                    updated_at
+                """,
+                (
+                    analysis_state,
+                    json.dumps(delta_signals),
+                    trigger_reason,
+                    json.dumps(anchor_vitals) if anchor_vitals is not None else None,
+                    patient_id,
+                    analysis_type,
+                ),
+            )
+            row = cur.fetchone()
+            conn.commit()
+        if not row:
+            return None
+        return self._hydrate_analysis_cache_row(row)
+
+    def clear_patient_analysis_cache(self, patient_id: str) -> None:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM llm_analysis_cache
+                WHERE patient_id = %s
+                """,
+                (patient_id,),
+            )
+            conn.commit()
+
     def store_ml_feedback(
         self,
         patient_id: str,
@@ -438,6 +642,13 @@ class PostgresStorage:
         row["created_at"] = row["created_at"].isoformat()
         return row
 
+    @staticmethod
+    def _hydrate_analysis_cache_row(row: dict[str, Any]) -> dict[str, Any]:
+        row["generated_at"] = row["generated_at"].isoformat()
+        row["updated_at"] = row["updated_at"].isoformat()
+        row["questionnaire"] = row.pop("questionnaire_json") or {}
+        return row
+
 
 class MemoryPostgresStorage:
     def __init__(self) -> None:
@@ -446,6 +657,7 @@ class MemoryPostgresStorage:
         self.notifications: list[dict[str, Any]] = []
         self.notes: list[dict[str, Any]] = []
         self.ml_feedback: list[dict[str, Any]] = []
+        self.analysis_cache: dict[tuple[str, str], dict[str, Any]] = {}
         self.next_alert_id = 1
         self.next_notification_id = 1
         self.next_feedback_id = 1
@@ -585,6 +797,74 @@ class MemoryPostgresStorage:
                 "created_at": _utc_now(),
             }
         )
+
+    def get_analysis_cache(self, patient_id: str, analysis_type: str) -> dict[str, Any] | None:
+        row = self.analysis_cache.get((patient_id, analysis_type))
+        return dict(row) if row else None
+
+    def upsert_analysis_cache(
+        self,
+        *,
+        patient_id: str,
+        analysis_type: str,
+        fingerprint: str,
+        payload: dict[str, Any],
+        summary_text: str,
+        questionnaire: dict[str, Any] | None,
+        analysis_state: str,
+        anchor_vitals: dict[str, Any] | None,
+        delta_signals: list[str],
+        trigger_reason: str,
+        source: str,
+        llm_status: str,
+    ) -> dict[str, Any]:
+        generated_at = _utc_now()
+        row = {
+            "patient_id": patient_id,
+            "analysis_type": analysis_type,
+            "fingerprint": fingerprint,
+            "payload": payload,
+            "summary_text": summary_text,
+            "questionnaire": questionnaire or {},
+            "analysis_state": analysis_state,
+            "anchor_vitals": anchor_vitals,
+            "delta_signals": list(delta_signals),
+            "trigger_reason": trigger_reason,
+            "source": source,
+            "llm_status": llm_status,
+            "generated_at": generated_at,
+            "updated_at": generated_at,
+        }
+        self.analysis_cache[(patient_id, analysis_type)] = row
+        return dict(row)
+
+    def update_analysis_cache_state(
+        self,
+        *,
+        patient_id: str,
+        analysis_type: str,
+        analysis_state: str,
+        delta_signals: list[str],
+        trigger_reason: str,
+        anchor_vitals: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        row = self.analysis_cache.get((patient_id, analysis_type))
+        if not row:
+            return None
+        row["analysis_state"] = analysis_state
+        row["delta_signals"] = list(delta_signals)
+        row["trigger_reason"] = trigger_reason
+        if anchor_vitals is not None:
+            row["anchor_vitals"] = anchor_vitals
+        row["updated_at"] = _utc_now()
+        return dict(row)
+
+    def clear_patient_analysis_cache(self, patient_id: str) -> None:
+        self.analysis_cache = {
+            key: value
+            for key, value in self.analysis_cache.items()
+            if key[0] != patient_id
+        }
 
     def store_ml_feedback(
         self,
