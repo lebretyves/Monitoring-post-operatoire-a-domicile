@@ -101,7 +101,7 @@ def load_settings(test_mode: bool | None = None) -> Settings:
         ml_runtime_dir=_resolve_path("ML_RUNTIME_DIR", "runtime/ml", must_exist=False),
         enable_llm=False if resolved_test_mode else _as_bool(os.getenv("ENABLE_LLM"), False),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"),
-        ollama_model=os.getenv("OLLAMA_MODEL", "meditron-8b-local"),
+        ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct"),
         ollama_timeout_seconds=int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "90")),
         kb_root=_resolve_path("KB_ROOT", "kb", must_exist=False),
         test_mode=resolved_test_mode,

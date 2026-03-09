@@ -1,4 +1,4 @@
-# LLM local Meditron 8B
+# LLM local Qwen 2.5 7B Instruct
 
 Le projet supporte un LLM local via API Ollama.
 
@@ -12,10 +12,9 @@ Le LLM ne remplace pas le moteur d'alertes. Il agit comme une aide a l'orientati
 
 ## Modele retenu
 
-- source Hugging Face: `QuantFactory/Meditron3-8B-GGUF`
-- fichier local attendu: `Meditron3-8B.Q4_0.gguf`
-- format: `.gguf`
-- dossier local conseille: `C:\models`
+- bibliotheque Ollama: `qwen2.5:7b-instruct`
+- usage vise: sorties JSON structurees, synthese clinique courte, hypotheses et questions differentielles
+- activation simple par `ollama pull`, sans fichier `.gguf` ni Modelfile custom
 
 ## Configuration
 
@@ -23,38 +22,12 @@ Variables a verifier dans [.env.example](c:\Users\lebre\Desktop\Monitoring\posto
 
 - `ENABLE_LLM=false`
 - `OLLAMA_PORT=11434`
-- `OLLAMA_MODEL=meditron-8b-local`
-- `OLLAMA_GGUF_HOST_DIR=C:/models`
-- `OLLAMA_GGUF_FILENAME=Meditron3-8B.Q4_0.gguf`
+- `OLLAMA_MODEL=qwen2.5:7b-instruct`
+- `OLLAMA_TIMEOUT_SECONDS=90`
 
 ## Arborescence
 
-- template Ollama: [Modelfile.meditron.template](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\infra\ollama\Modelfile.meditron.template)
-- script de download: [download_meditron_gguf.ps1](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\scripts\download_meditron_gguf.ps1)
-- script d'import: [setup_ollama_model.ps1](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\scripts\setup_ollama_model.ps1)
-
-## Telechargement
-
-Installer l'outil Hugging Face:
-
-```powershell
-py -m pip install -U huggingface_hub
-```
-
-Telecharger le GGUF:
-
-```powershell
-.\scripts\download_meditron_gguf.ps1
-```
-
-Equivalent manuel:
-
-```powershell
-huggingface-cli download QuantFactory/Meditron3-8B-GGUF `
-  Meditron3-8B.Q4_0.gguf `
-  --local-dir C:\models `
-  --local-dir-use-symlinks False
-```
+- script de pull/import: [setup_ollama_model.ps1](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\scripts\setup_ollama_model.ps1)
 
 ## Import dans Ollama
 
@@ -64,7 +37,7 @@ huggingface-cli download QuantFactory/Meditron3-8B-GGUF `
 docker compose up -d ollama
 ```
 
-2. Importer le modele:
+2. Telecharger le modele:
 
 ```powershell
 .\scripts\setup_ollama_model.ps1 -StartOllama
@@ -74,9 +47,7 @@ docker compose up -d ollama
 
 ```env
 ENABLE_LLM=true
-OLLAMA_MODEL=meditron-8b-local
-OLLAMA_GGUF_HOST_DIR=C:/models
-OLLAMA_GGUF_FILENAME=Meditron3-8B.Q4_0.gguf
+OLLAMA_MODEL=qwen2.5:7b-instruct
 ```
 
 4. Rebuild le backend:
@@ -132,5 +103,5 @@ alors l'API renvoie une analyse `rule-based` au lieu d'une erreur bloquante.
 ## Limite actuelle
 
 - le service `ollama` demarre avec la stack standard
-- sur une machine modeste, Meditron peut rester lent sur les routes d'analyse les plus lourdes
+- sur une machine modeste, `qwen2.5:7b-instruct` peut encore rester lent sur les routes d'analyse les plus lourdes
 - dans ce cas, l'API et l'UI affichent explicitement que la reponse provient du `Fallback local actif`

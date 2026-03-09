@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useMemo, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 
 import type { PatientSummary, VitalPayload } from "../types/vitals";
@@ -22,6 +22,7 @@ interface PatientMonitorStripProps {
   showDetailLink?: boolean;
   headerTitle?: string;
   layoutMode?: PatientMonitorLayout;
+  phaseSeconds?: number;
 }
 
 const MONITOR_COLORS = {
@@ -88,6 +89,11 @@ const METRIC_META: Record<
 
 const SWEEP_SECONDS = 5.8;
 const WAVE_SAMPLES = 220;
+const SHARED_CLOCK_INTERVAL_MS = 70;
+
+let sharedClockMs = Date.now();
+let sharedClockTimer: number | null = null;
+const sharedClockListeners = new Set<() => void>();
 
 export function PatientMonitorStrip({
   patient,
@@ -96,17 +102,13 @@ export function PatientMonitorStrip({
   showDetailLink = true,
   headerTitle = "Scope patient",
   layoutMode = "full",
+  phaseSeconds,
 }: PatientMonitorStripProps) {
   const vitals = patient.last_vitals ?? null;
-  const [phaseMs, setPhaseMs] = useState(Date.now());
+  const phaseMs = useSharedMonitorClock(phaseSeconds);
   const [activeMetric, setActiveMetric] = useState<AlarmMetricId | null>(null);
   const compact = layoutMode === "compact";
   const valuesOnly = layoutMode === "values";
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setPhaseMs(Date.now()), 70);
-    return () => window.clearInterval(timer);
-  }, []);
 
   const sweepProgress = ((phaseMs / 1000) % SWEEP_SECONDS) / SWEEP_SECONDS;
   const monitorSignals = useMemo(() => buildMonitorSignals(patient.id, vitals, phaseMs / 1000), [patient.id, vitals, phaseMs]);
@@ -405,6 +407,35 @@ export function PatientMonitorStrip({
       ) : null}
     </article>
   );
+}
+
+function useSharedMonitorClock(externalPhaseSeconds?: number): number {
+  const sharedPhaseMs = useSyncExternalStore(subscribeSharedClock, getSharedClockSnapshot, getSharedClockSnapshot);
+  if (typeof externalPhaseSeconds === "number") {
+    return externalPhaseSeconds * 1000;
+  }
+  return sharedPhaseMs;
+}
+
+function subscribeSharedClock(listener: () => void): () => void {
+  sharedClockListeners.add(listener);
+  if (sharedClockTimer === null && typeof window !== "undefined") {
+    sharedClockTimer = window.setInterval(() => {
+      sharedClockMs = Date.now();
+      sharedClockListeners.forEach((notify) => notify());
+    }, SHARED_CLOCK_INTERVAL_MS);
+  }
+  return () => {
+    sharedClockListeners.delete(listener);
+    if (sharedClockListeners.size === 0 && sharedClockTimer !== null) {
+      window.clearInterval(sharedClockTimer);
+      sharedClockTimer = null;
+    }
+  };
+}
+
+function getSharedClockSnapshot(): number {
+  return sharedClockMs;
 }
 
 export function loadStoredAlarmLimits(): Record<string, PatientAlarmLimits> {

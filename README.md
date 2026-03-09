@@ -12,7 +12,7 @@ Projet MBA1 Epitech du 4 mars 2026. L'objectif est simple: un projet simple qui 
 - React + Vite pour le dashboard
 - IsolationForest pour le bonus anomalies
 - Ollama local pour le bonus LLM, avec fallback `rule-based` visible
-- Meditron 8B `.gguf` local via Ollama pour les analyses IA
+- Qwen 2.5 7B Instruct via Ollama pour les analyses IA
 
 ## Demarrage rapide
 
@@ -166,21 +166,20 @@ make seed
 
 ## LLM local
 
-Le support local Meditron 8B `.gguf` via Ollama est prepare:
+Le support local Ollama utilise maintenant `qwen2.5:7b-instruct` comme modele par defaut:
 
 - doc: [docs/llm-local.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\llm-local.md)
-- template: [Modelfile.meditron.template](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\infra\ollama\Modelfile.meditron.template)
-- script d'import: [setup_ollama_model.ps1](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\scripts\setup_ollama_model.ps1)
+- script d'import/pull: [setup_ollama_model.ps1](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\scripts\setup_ollama_model.ps1)
 
 Activation type:
 
 ```powershell
-.\scripts\download_meditron_gguf.ps1
 docker compose up -d ollama
 .\scripts\setup_ollama_model.ps1 -StartOllama
+docker compose up --build -d backend
 ```
 
-Le service `ollama` fait partie du lancement standard. Si `ENABLE_LLM=true`, le backend pointe par defaut vers `meditron-8b-local` avec un timeout de `90 s`.
+Le service `ollama` fait partie du lancement standard. Si `ENABLE_LLM=true`, le backend pointe par defaut vers `qwen2.5:7b-instruct` avec un timeout de `90 s`.
 Si le modele ne repond pas dans le delai imparti, l'UI affiche explicitement `Fallback local actif`.
 
 ## Bonnes pratiques retenues

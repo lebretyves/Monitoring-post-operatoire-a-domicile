@@ -25,8 +25,5 @@ refresh-alerts:
 llm-up:
 	docker compose up -d ollama
 
-llm-download:
-	powershell -ExecutionPolicy Bypass -File .\scripts\download_meditron_gguf.ps1
-
-llm-import:
+llm-pull:
 	powershell -ExecutionPolicy Bypass -File .\scripts\setup_ollama_model.ps1

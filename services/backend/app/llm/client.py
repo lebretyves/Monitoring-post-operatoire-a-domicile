@@ -51,6 +51,24 @@ class OllamaClient:
         except httpx.HTTPError:
             return False
 
+    async def is_model_installed(self, timeout_seconds: int = 2) -> bool:
+        if not self.enabled:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                response = await client.get(f"{self.base_url}/api/tags")
+                response.raise_for_status()
+                payload = response.json()
+        except (httpx.HTTPError, json.JSONDecodeError):
+            return False
+
+        for model in payload.get("models", []):
+            name = str(model.get("name", "")).strip()
+            base_model = str(model.get("model", "")).strip()
+            if name == self.model or base_model == self.model:
+                return True
+        return False
+
     async def probe_generation(self, timeout_seconds: int = 12) -> bool:
         if not self.enabled:
             return False

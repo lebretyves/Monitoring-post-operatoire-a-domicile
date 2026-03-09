@@ -90,7 +90,7 @@ services:
       ENABLE_ML: ${ENABLE_ML:-true}
       ENABLE_LLM: ${ENABLE_LLM:-false}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-meditron-8b-local}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-90}
       KB_ROOT: /app/kb
     volumes:
@@ -179,8 +179,6 @@ services:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama-data:/root/.ollama
-      - ${OLLAMA_GGUF_HOST_DIR:-./models}:/models:ro
-      - ./infra/ollama:/modelfiles
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 20s

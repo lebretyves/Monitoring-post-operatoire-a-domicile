@@ -143,7 +143,8 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
 
     @app.get("/health")
     async def health():
-        llm_reachable = await app.state.services.llm_client.probe_generation(timeout_seconds=12)
+        llm_service_reachable = await app.state.services.llm_client.is_available(timeout_seconds=2)
+        llm_model_installed = await app.state.services.llm_client.is_model_installed(timeout_seconds=2)
         return {
             "status": "ok",
             "test_mode": settings.test_mode,
@@ -151,7 +152,9 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
                 "enabled": settings.enable_llm,
                 "model": settings.ollama_model,
                 "base_url": settings.ollama_base_url,
-                "reachable": llm_reachable,
+                "reachable": llm_service_reachable and llm_model_installed,
+                "service_reachable": llm_service_reachable,
+                "model_installed": llm_model_installed,
             },
         }
 
