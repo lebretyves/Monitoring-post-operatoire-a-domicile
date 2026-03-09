@@ -26,6 +26,7 @@ import {
   type PatientAlarmLimits,
   loadStoredAlarmLimits,
 } from "../components/PatientMonitorStrip";
+import { ScenarioControls } from "../components/ScenarioControls";
 import { VitalChart } from "../components/VitalChart";
 import type { AlertRecord, LiveEvent } from "../types/alerts";
 import type {
@@ -73,8 +74,8 @@ export function PatientDetailPage() {
   const [clinicalPackage, setClinicalPackage] = useState<ClinicalPackageResponse | null>(null);
   const [baselineClinicalPackage, setBaselineClinicalPackage] = useState<ClinicalPackageResponse | null>(null);
   const [questionnaireComparison, setQuestionnaireComparison] = useState<{
-    before: ClinicalPackageResponse;
-    after: ClinicalPackageResponse;
+    before: ClinicalHypothesisRow[];
+    after: ClinicalHypothesisRow[];
   } | null>(null);
   const [clinicalPackageStatus, setClinicalPackageStatus] = useState("idle");
   const [hours, setHours] = useState(0);
@@ -89,7 +90,8 @@ export function PatientDetailPage() {
   const [questionnaireSubmitStatus, setQuestionnaireSubmitStatus] = useState("idle");
   const [clinicalContextSelection, setClinicalContextSelection] = useState<ClinicalContextSelection>(EMPTY_CLINICAL_CONTEXT);
   const [questionnaireSelection, setQuestionnaireSelection] = useState<QuestionnaireSubmission>(EMPTY_QUESTIONNAIRE_SELECTION);
-  const [questionnaireCollapsed, setQuestionnaireCollapsed] = useState(false);
+  const [questionnaireCollapsed, setQuestionnaireCollapsed] = useState(true);
+  const [scenarioRevealed, setScenarioRevealed] = useState(false);
   const [analysisRestState, setAnalysisRestState] = useState<AnalysisRestState>({
     mode: "active",
     anchorVitals: null,
@@ -106,6 +108,11 @@ export function PatientDetailPage() {
   const activeAlerts = alerts.filter((alert) => alert.metric_snapshot.historical_backfill !== true);
   const historicalAlerts = alerts.filter((alert) => alert.metric_snapshot.historical_backfill === true);
   const questionnaireRestMessage = buildAnalysisRestMessage(analysisRestState);
+  const blindValidation = buildBlindValidationState(
+    currentPathology,
+    questionnaireComparison?.before ?? baselineClinicalPackage?.hypothesis_ranking ?? null,
+    questionnaireComparison?.after ?? null
+  );
 
   useEffect(() => {
     window.localStorage.setItem(ALARM_STORAGE_KEY, JSON.stringify(alarmLimits));
@@ -122,7 +129,8 @@ export function PatientDetailPage() {
     setQuestionnaireSubmitStatus("idle");
     setClinicalContextSelection(EMPTY_CLINICAL_CONTEXT);
     setQuestionnaireSelection(EMPTY_QUESTIONNAIRE_SELECTION);
-    setQuestionnaireCollapsed(false);
+    setQuestionnaireCollapsed(true);
+    setScenarioRevealed(false);
     setAnalysisRestState({
       mode: "active",
       anchorVitals: null,
@@ -147,7 +155,7 @@ export function PatientDetailPage() {
   }
 
   async function ensureComparisonBaseline(): Promise<ClinicalPackageResponse | null> {
-    if (baselineClinicalPackage) {
+    if (baselineClinicalPackage && !baselineClinicalPackage.questionnaire_state) {
       return baselineClinicalPackage;
     }
     if (clinicalPackage && !clinicalPackage.questionnaire_state) {
@@ -207,11 +215,13 @@ export function PatientDetailPage() {
       submittedAt: response.analysis_state.submitted_at ?? response.analysis_state.generated_at ?? null,
     });
     setQuestionnaireSelection(response.questionnaire_state ?? EMPTY_QUESTIONNAIRE_SELECTION);
-    setQuestionnaireCollapsed(response.analysis_state.mode !== "active");
-    if (comparisonBefore && response.questionnaire_state) {
+    setQuestionnaireCollapsed((current) => (response.questionnaire_state ? true : current));
+    const comparisonRows =
+      comparisonBefore?.hypothesis_ranking ?? response.questionnaire_baseline_hypothesis_ranking ?? null;
+    if (comparisonRows && response.questionnaire_state) {
       setQuestionnaireComparison({
-        before: comparisonBefore,
-        after: response,
+        before: comparisonRows,
+        after: response.hypothesis_ranking,
       });
     } else {
       setQuestionnaireComparison(null);
@@ -220,6 +230,7 @@ export function PatientDetailPage() {
 
   function handleQuestionnaireChange(next: QuestionnaireSubmission) {
     setQuestionnaireSelection(next);
+    setScenarioRevealed(false);
     setAnalysisRestState((current) => {
       if (current.mode === "active") {
         return current;
@@ -243,7 +254,7 @@ export function PatientDetailPage() {
     setClinicalPackageStatus("loading");
     try {
       const response = await requestDefaultClinicalPackage(patientId);
-      applyClinicalPackageResponse(response, { setAsBaseline: true });
+      applyClinicalPackageResponse(response, { setAsBaseline: !response.questionnaire_state });
     } finally {
       setSummaryStatus("idle");
       setClinicalPackageStatus("idle");
@@ -310,7 +321,7 @@ export function PatientDetailPage() {
       try {
         const response = await requestDefaultClinicalPackage(patientId);
         if (mounted) {
-          applyClinicalPackageResponse(response, { setAsBaseline: true });
+          applyClinicalPackageResponse(response, { setAsBaseline: !response.questionnaire_state });
         }
       } catch (error) {
         if (mounted) {
@@ -350,7 +361,7 @@ export function PatientDetailPage() {
       } catch (error) {
         if (mounted) {
           setQuestionnaire(null);
-          setQuestionnaireCollapsed(false);
+          setQuestionnaireCollapsed(true);
         }
       } finally {
         if (mounted) {
@@ -445,6 +456,10 @@ export function PatientDetailPage() {
     setClinicalPackageStatus("loading");
     const analysisPayload = buildAnalysisPayload();
     const questionnairePayload = analysisPayload.questionnaire;
+    if (questionnairePayload) {
+      setScenarioRevealed(false);
+      setQuestionnaireCollapsed(true);
+    }
     if (!questionnairePayload) {
       setQuestionnaireComparison(null);
     }
@@ -458,6 +473,9 @@ export function PatientDetailPage() {
         comparisonBefore: questionnairePayload ? comparisonBaseline : null,
       });
     } catch (error) {
+      if (questionnairePayload) {
+        setQuestionnaireCollapsed(false);
+      }
       setSummary(error instanceof Error ? error.message : "Impossible de lancer l'analyse IA contextualisee.");
     } finally {
       setQuestionnaireSubmitStatus("idle");
@@ -561,7 +579,7 @@ export function PatientDetailPage() {
             {typeof currentPostopDay === "number" ? ` - J+${currentPostopDay}` : ""}
           </h1>
           <div style={{ color: "#dbeafe", fontWeight: 500 }}>
-            {currentSurgeryType || "chirurgie non renseignee"} - slot {patientId} - WebSocket {wsStatus}
+            slot {patientId} - WebSocket {wsStatus}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -631,6 +649,8 @@ export function PatientDetailPage() {
         title="Antecedents medicaux chirurgicaux"
         description="Retrouve ici les selections d'antecedents et facteurs cliniques. Elles sont preparees pour une future exploitation IA de conduite a tenir."
         showAnalyzeButton={false}
+        collapsible
+        defaultCollapsed
       />
 
       <section>
@@ -816,6 +836,17 @@ export function PatientDetailPage() {
               )}
             </div>
 
+            <ScenarioControls
+              scenario={currentPathology}
+              revealed={scenarioRevealed}
+              canReveal={blindValidation.canReveal}
+              onReveal={() => setScenarioRevealed(true)}
+              beforeHypothesis={blindValidation.before}
+              afterHypothesis={blindValidation.after}
+              verdict={blindValidation.verdict}
+              helperText={blindValidation.helperText}
+            />
+
             {questionnaireComparison ? (
               <div style={{ display: "grid", gap: 10 }}>
                 <div style={{ fontWeight: 700, color: "#0f172a" }}>Hypotheses apres questionnaire</div>
@@ -823,8 +854,8 @@ export function PatientDetailPage() {
                   Comparatif avant / apres validation du questionnaire differentiel.
                 </div>
                 {buildHypothesisComparisonRows(
-                  questionnaireComparison.before.hypothesis_ranking,
-                  questionnaireComparison.after.hypothesis_ranking
+                  questionnaireComparison.before,
+                  questionnaireComparison.after
                 ).map((row) => (
                   <div key={row.label} style={{ borderRadius: 14, background: "#f8fafc", padding: 14, border: "1px solid #e2e8f0", display: "grid", gap: 10 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -1039,6 +1070,268 @@ function RiskExplainCard({
   );
 }
 
+type ClinicalFamily =
+  | "stable"
+  | "respiratory"
+  | "pulmonary_embolism"
+  | "sepsis"
+  | "hemorrhage"
+  | "pain"
+  | "cardiac"
+  | "unknown";
+
+type TruthStatus = "match" | "mismatch" | "unknown";
+type ValidationTone = "positive" | "negative" | "warning" | "neutral";
+
+function buildBlindValidationState(
+  scenario: string,
+  beforeRows: ClinicalHypothesisRow[] | null | undefined,
+  afterRows: ClinicalHypothesisRow[] | null | undefined
+): {
+  before: {
+    label: string;
+    percent: number;
+    compatibility: "high" | "medium" | "low";
+    truthStatus: TruthStatus;
+  } | null;
+  after: {
+    label: string;
+    percent: number;
+    compatibility: "high" | "medium" | "low";
+    truthStatus: TruthStatus;
+  } | null;
+  verdict: {
+    label: string;
+    detail: string;
+    tone: ValidationTone;
+  } | null;
+  canReveal: boolean;
+  helperText: string;
+} {
+  const before = buildValidationSnapshot(beforeRows, scenario);
+  const after = buildValidationSnapshot(afterRows, scenario);
+
+  if (!before) {
+    return {
+      before: null,
+      after: null,
+      verdict: null,
+      canReveal: false,
+      helperText: "Analyse initiale indisponible pour le mode validation.",
+    };
+  }
+
+  if (!after) {
+    return {
+      before,
+      after: null,
+      verdict: null,
+      canReveal: false,
+      helperText: "Valide le questionnaire pour comparer l'orientation initiale puis l'analyse recontextualisee.",
+    };
+  }
+
+  return {
+    before,
+    after,
+    verdict: buildBlindValidationVerdict(before, after),
+    canReveal: scenario.trim().length > 0,
+    helperText: "Le scenario reel reste masque jusqu'a la revelation manuelle. Ce panneau sert a mesurer l'apport du questionnaire.",
+  };
+}
+
+function buildValidationSnapshot(
+  rows: ClinicalHypothesisRow[] | null | undefined,
+  scenario: string
+): {
+  label: string;
+  percent: number;
+  compatibility: "high" | "medium" | "low";
+  truthStatus: TruthStatus;
+} | null {
+  const leading = pickLeadingHypothesis(rows);
+  if (!leading) {
+    return null;
+  }
+  return {
+    label: leading.label,
+    percent: leading.compatibility_percent,
+    compatibility: leading.compatibility,
+    truthStatus: matchHypothesisToScenario(leading.label, scenario),
+  };
+}
+
+function pickLeadingHypothesis(rows: ClinicalHypothesisRow[] | null | undefined): ClinicalHypothesisRow | null {
+  if (!rows || rows.length === 0) {
+    return null;
+  }
+  return rows[0];
+}
+
+function buildBlindValidationVerdict(
+  before: {
+    label: string;
+    percent: number;
+    compatibility: "high" | "medium" | "low";
+    truthStatus: TruthStatus;
+  },
+  after: {
+    label: string;
+    percent: number;
+    compatibility: "high" | "medium" | "low";
+    truthStatus: TruthStatus;
+  }
+): {
+  label: string;
+  detail: string;
+  tone: ValidationTone;
+} {
+  if (before.truthStatus === "unknown" || after.truthStatus === "unknown") {
+    return {
+      label: "Lecture partielle",
+      detail: "La correspondance automatique avec le scenario de reference reste trop large pour conclure formellement.",
+      tone: "warning",
+    };
+  }
+
+  const beforeMatch = before.truthStatus === "match";
+  const afterMatch = after.truthStatus === "match";
+  const delta = after.percent - before.percent;
+
+  if (!beforeMatch && afterMatch) {
+    return {
+      label: "Amelioration nette",
+      detail: `Le questionnaire remet ${after.label} au premier rang et aligne mieux l'analyse sur la verite terrain.`,
+      tone: "positive",
+    };
+  }
+
+  if (beforeMatch && !afterMatch) {
+    return {
+      label: "Regression",
+      detail: `L'hypothese dominante s'eloigne du scenario reel apres questionnaire (${after.label}).`,
+      tone: "negative",
+    };
+  }
+
+  if (beforeMatch && afterMatch) {
+    if (delta > 0) {
+      return {
+        label: "Consolidation",
+        detail: `La bonne hypothese reste en tete et gagne ${delta} points apres questionnaire.`,
+        tone: "positive",
+      };
+    }
+    if (delta < 0) {
+      return {
+        label: "Toujours concordant",
+        detail: `La bonne hypothese reste dominante mais perd ${Math.abs(delta)} points.`,
+        tone: "neutral",
+      };
+    }
+    return {
+      label: "Stable et concordant",
+      detail: "Le questionnaire confirme la meme hypothese dominante sans modifier son poids.",
+      tone: "neutral",
+    };
+  }
+
+  if (after.label !== before.label) {
+    return {
+      label: "Reorientation non validee",
+      detail: `Le questionnaire deplace l'analyse vers ${after.label}, sans encore rejoindre le scenario reel.`,
+      tone: "warning",
+    };
+  }
+
+  if (delta > 0) {
+    return {
+      label: "Renforcement hors cible",
+      detail: `La meme hypothese reste en tete et gagne ${delta} points sans correspondre a la verite terrain.`,
+      tone: "negative",
+    };
+  }
+
+  if (delta < 0) {
+    return {
+      label: "Toujours hors cible",
+      detail: "L'hypothese principale reste non concordante malgre une baisse de poids apres questionnaire.",
+      tone: "negative",
+    };
+  }
+
+  return {
+    label: "Stable hors cible",
+    detail: "Le questionnaire ne modifie pas l'hypothese dominante et elle reste non concordante.",
+    tone: "negative",
+  };
+}
+
+function matchHypothesisToScenario(hypothesisLabel: string, scenario: string): TruthStatus {
+  const expectedFamilies = resolveScenarioFamilies(scenario);
+  const hypothesisFamily = resolveClinicalFamily(hypothesisLabel);
+  if (expectedFamilies.length === 0 || expectedFamilies.includes("unknown") || hypothesisFamily === "unknown") {
+    return "unknown";
+  }
+  return expectedFamilies.includes(hypothesisFamily) ? "match" : "mismatch";
+}
+
+function resolveScenarioFamilies(scenario: string): ClinicalFamily[] {
+  const normalized = normalizeClinicalText(scenario);
+  if (!normalized) {
+    return [];
+  }
+  if (normalized.includes("constantes normales") || normalized.includes("cas temoin") || normalized.includes("stable")) {
+    return ["stable"];
+  }
+  if (normalized.includes("detresse respiratoire")) {
+    return ["respiratory", "pulmonary_embolism"];
+  }
+  return [resolveClinicalFamily(scenario)];
+}
+
+function resolveClinicalFamily(label: string): ClinicalFamily {
+  const normalized = normalizeClinicalText(label);
+  if (!normalized) {
+    return "unknown";
+  }
+  if (normalized.includes("constantes normales") || normalized.includes("temoin") || normalized.includes("stable")) {
+    return "stable";
+  }
+  if (normalized.includes("embolie")) {
+    return "pulmonary_embolism";
+  }
+  if (normalized.includes("sepsis") || normalized.includes("infect")) {
+    return "sepsis";
+  }
+  if (normalized.includes("hemorrag") || normalized.includes("hypovolem")) {
+    return "hemorrhage";
+  }
+  if (normalized.includes("douleur")) {
+    return "pain";
+  }
+  if (normalized.includes("cardiaq") || normalized.includes("bas debit")) {
+    return "cardiac";
+  }
+  if (
+    normalized.includes("pneumopathie")
+    || normalized.includes(" ira ")
+    || normalized.includes("ira post-op")
+    || normalized.includes("respiratoire")
+  ) {
+    return "respiratory";
+  }
+  return "unknown";
+}
+
+function normalizeClinicalText(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, " ");
+}
+
 function buildQuestionnairePayload(
   selection: QuestionnaireSubmission
 ): QuestionnaireSubmission | undefined {
@@ -1064,8 +1357,8 @@ function detectAnalysisDelta(anchor: RestAnchorVitals, next: VitalPayload): stri
   if (Math.abs(next.temp - anchor.temp) >= ANALYSIS_DELTA_TRIGGER.temp) {
     signals.push(`T ${formatSignedFloat(next.temp - anchor.temp)} C`);
   }
-  if (Math.abs((next.shock_index ?? 0) - anchor.shock_index) >= ANALYSIS_DELTA_TRIGGER.shockIndex) {
-    signals.push(`shock index ${formatSignedFloat((next.shock_index ?? 0) - anchor.shock_index)}`);
+  if (Math.abs((next.shock_index ?? 0) - (anchor.shock_index ?? 0)) >= ANALYSIS_DELTA_TRIGGER.shockIndex) {
+    signals.push(`shock index ${formatSignedFloat((next.shock_index ?? 0) - (anchor.shock_index ?? 0))}`);
   }
   return signals;
 }

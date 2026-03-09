@@ -3,6 +3,10 @@
 ## Health
 
 - `GET /health`
+  - Healthcheck léger : vérifie que le service Ollama répond et que le modèle est installé
+- `GET /health/llm`
+  - Healthcheck approfondi du LLM : déclenche une génération réelle pour détecter cold starts, timeouts, et erreurs JSON
+  - Plus lent (~12s timeout) mais plus fiable pour diagnostiquer l'état opérationnel du LLM
 
 ## Patients
 

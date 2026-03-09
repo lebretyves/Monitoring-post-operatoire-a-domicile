@@ -143,6 +143,7 @@ export interface ClinicalPackageResponse {
   explanatory_score: ExplanatoryScore;
   analysis_state: AnalysisStateSnapshot;
   questionnaire_state?: QuestionnaireSubmission | null;
+  questionnaire_baseline_hypothesis_ranking?: ClinicalHypothesisRow[] | null;
   structured_synthesis: string;
   alert_explanations: string[];
   hypothesis_ranking: ClinicalHypothesisRow[];

@@ -12,7 +12,7 @@ import type {
   VitalPayload
 } from "../types/vitals";
 
-const API_BASE = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
+const API_BASE = import.meta.env?.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 async function readJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`);

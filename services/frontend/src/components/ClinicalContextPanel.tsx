@@ -51,6 +51,8 @@ interface ClinicalContextPanelProps {
   description?: string;
   analyzeLabel?: string;
   showAnalyzeButton?: boolean;
+  collapsible?: boolean;
+  defaultCollapsed?: boolean;
 }
 
 export function ClinicalContextPanel({
@@ -62,7 +64,15 @@ export function ClinicalContextPanel({
   description = "Ces elements enrichissent uniquement l'analyse IA. Ils ne modifient ni le simulateur, ni les alertes, ni les constantes.",
   analyzeLabel = "Analyser avec contexte patient",
   showAnalyzeButton = true,
+  collapsible = false,
+  defaultCollapsed = false,
 }: ClinicalContextPanelProps) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+
+  useEffect(() => {
+    setCollapsed(defaultCollapsed);
+  }, [defaultCollapsed, title]);
+
   return (
     <div
       style={{
@@ -74,77 +84,112 @@ export function ClinicalContextPanel({
         gap: 14,
       }}
     >
-      <div>
-        <h3 style={{ marginTop: 0, marginBottom: 6 }}>{title}</h3>
-        <div style={{ color: "#64748b", fontSize: 14 }}>
-          {description}
-        </div>
-      </div>
-
-      <ContextDropdown
-        title="Terrain patient"
-        options={PATIENT_FACTORS}
-        selected={value.patient_factors}
-        onChange={(items) => onChange({ ...value, patient_factors: items })}
-      />
-
-      <ContextDropdown
-        title="Contexte peri-op"
-        options={PERIOPERATIVE_CONTEXT}
-        selected={value.perioperative_context}
-        onChange={(items) => onChange({ ...value, perioperative_context: items })}
-      />
-
-      <label style={{ display: "grid", gap: 6, color: "#334155", fontWeight: 600 }}>
-        Commentaire libre
-        <textarea
-          value={value.free_text}
-          onChange={(event) => onChange({ ...value, free_text: event.target.value })}
-          placeholder="Precise ici les elements choisis comme 'Autre' ou tout contexte clinique additionnel."
-          rows={3}
-          style={{
-            width: "100%",
-            borderRadius: 12,
-            border: "1px solid #cbd5e1",
-            padding: 10,
-            font: "inherit",
-            resize: "vertical",
-            minHeight: 80,
-          }}
-        />
-      </label>
-
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
-          gap: 10,
+          gap: 12,
+          alignItems: "flex-start",
           flexWrap: "wrap",
-          alignItems: "center",
         }}
       >
-        <div style={{ color: "#64748b", fontSize: 13 }}>
-          Clique sur une liste pour l'ouvrir. Chaque choix est visible juste dessous et tu peux supprimer un item individuellement.
+        <div>
+          <h3 style={{ marginTop: 0, marginBottom: 6 }}>{title}</h3>
+          <div style={{ color: "#64748b", fontSize: 14 }}>
+            {description}
+          </div>
         </div>
-        {showAnalyzeButton && onAnalyze ? (
+        {collapsible ? (
           <button
             type="button"
-            onClick={onAnalyze}
-            disabled={loading}
+            onClick={() => setCollapsed((current) => !current)}
             style={{
-              border: "none",
+              border: "1px solid #cbd5e1",
               borderRadius: 999,
-              padding: "10px 16px",
-              background: "#0f172a",
-              color: "#ffffff",
+              background: "#f8fafc",
+              color: "#0f172a",
+              padding: "8px 12px",
               fontWeight: 700,
-              cursor: loading ? "wait" : "pointer",
+              cursor: "pointer",
             }}
           >
-            {loading ? "Analyse IA..." : analyzeLabel}
+            {collapsed ? "Afficher" : "Masquer"}
           </button>
         ) : null}
       </div>
+
+      {collapsed ? (
+        <div style={{ color: "#64748b", fontSize: 13 }}>
+          Bloc replie. Ouvre-le pour modifier le terrain patient, le contexte peri-op et le commentaire libre.
+        </div>
+      ) : (
+        <>
+          <ContextDropdown
+            title="Terrain patient"
+            options={PATIENT_FACTORS}
+            selected={value.patient_factors}
+            onChange={(items) => onChange({ ...value, patient_factors: items })}
+          />
+
+          <ContextDropdown
+            title="Contexte peri-op"
+            options={PERIOPERATIVE_CONTEXT}
+            selected={value.perioperative_context}
+            onChange={(items) => onChange({ ...value, perioperative_context: items })}
+          />
+
+          <label style={{ display: "grid", gap: 6, color: "#334155", fontWeight: 600 }}>
+            Commentaire libre
+            <textarea
+              value={value.free_text}
+              onChange={(event) => onChange({ ...value, free_text: event.target.value })}
+              placeholder="Precise ici les elements choisis comme 'Autre' ou tout contexte clinique additionnel."
+              rows={3}
+              style={{
+                width: "100%",
+                borderRadius: 12,
+                border: "1px solid #cbd5e1",
+                padding: 10,
+                font: "inherit",
+                resize: "vertical",
+                minHeight: 80,
+              }}
+            />
+          </label>
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 10,
+              flexWrap: "wrap",
+              alignItems: "center",
+            }}
+          >
+            <div style={{ color: "#64748b", fontSize: 13 }}>
+              Clique sur une liste pour l'ouvrir. Chaque choix est visible juste dessous et tu peux supprimer un item individuellement.
+            </div>
+            {showAnalyzeButton && onAnalyze ? (
+              <button
+                type="button"
+                onClick={onAnalyze}
+                disabled={loading}
+                style={{
+                  border: "none",
+                  borderRadius: 999,
+                  padding: "10px 16px",
+                  background: "#0f172a",
+                  color: "#ffffff",
+                  fontWeight: 700,
+                  cursor: loading ? "wait" : "pointer",
+                }}
+              >
+                {loading ? "Analyse IA..." : analyzeLabel}
+              </button>
+            ) : null}
+          </div>
+        </>
+      )}
     </div>
   );
 }

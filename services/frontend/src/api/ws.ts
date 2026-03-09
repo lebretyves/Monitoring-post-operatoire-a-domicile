@@ -1,6 +1,6 @@
 import type { LiveEvent } from "../types/alerts";
 
-const WS_URL = ((import.meta as any).env?.VITE_WS_URL as string | undefined) ?? "ws://localhost:8000/ws/live";
+const WS_URL = import.meta.env?.VITE_WS_URL ?? "ws://localhost:8000/ws/live";
 
 export function connectLiveSocket(onEvent: (event: LiveEvent) => void, onStatus?: (status: string) => void): () => void {
   const socket = new WebSocket(WS_URL);

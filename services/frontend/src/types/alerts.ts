@@ -30,5 +30,6 @@ export interface NotificationRecord {
 export interface LiveEvent {
   type: "vitals" | "alert" | "ack" | "notification" | "notification_read" | "notifications_reset";
   patient_id: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   payload: any;
 }

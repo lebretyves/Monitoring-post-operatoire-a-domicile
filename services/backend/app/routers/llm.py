@@ -168,6 +168,7 @@ class ClinicalPackageResponse(BaseModel):
     explanatory_score: ExplanatoryScoreResponse
     analysis_state: AnalysisStateResponse
     questionnaire_state: QuestionnaireResponsePayload | None = None
+    questionnaire_baseline_hypothesis_ranking: list[HypothesisRow] | None = None
     structured_synthesis: str
     alert_explanations: list[str]
     hypothesis_ranking: list[HypothesisRow]
@@ -303,6 +304,21 @@ def _normalize_questionnaire_state(questionnaire_payload: dict[str, Any] | None)
         "comment": comment,
         "answers": answers,
     }
+
+
+def _questionnaire_baseline_hypothesis_ranking_from_cache(cache_row: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    if not cache_row:
+        return None
+    payload = dict(cache_row.get("payload") or {})
+    stored_rows = payload.get("questionnaire_baseline_hypothesis_ranking")
+    if isinstance(stored_rows, list) and stored_rows:
+        return stored_rows
+    if _normalize_questionnaire_state(cache_row.get("questionnaire")):
+        return None
+    hypothesis_rows = payload.get("hypothesis_ranking")
+    if isinstance(hypothesis_rows, list) and hypothesis_rows:
+        return hypothesis_rows
+    return None
 
 
 def _alert_level_rank(level: str) -> int:
@@ -663,6 +679,7 @@ async def resolve_patient_analysis(
     payload: ClinicalContextPayload,
     *,
     force: bool = False,
+    persist_cache: bool = True,
 ) -> ClinicalPackageResponse:
     services, patient, last_vitals, _scenario, surgery_type, alerts, history_points = _load_patient_bundle(
         patient_id,
@@ -680,9 +697,9 @@ async def resolve_patient_analysis(
         history_points=history_points,
         prompt_context=prompt_context,
     )
-    cache_row = services.postgres.get_analysis_cache(patient_id, ANALYSIS_CACHE_TYPE)
+    cache_row = services.postgres.get_analysis_cache(patient_id, ANALYSIS_CACHE_TYPE) if persist_cache else None
 
-    if cache_row and not force:
+    if persist_cache and cache_row and not force:
         current_mode = str(cache_row.get("analysis_state") or "active")
         current_trigger = str(cache_row.get("trigger_reason") or "")
         current_delta = list(cache_row.get("delta_signals") or [])
@@ -773,6 +790,20 @@ async def resolve_patient_analysis(
         "summary_text": summary_text,
         "explanatory_score": explanatory_score,
     }
+    if questionnaire_state and persist_cache:
+        questionnaire_baseline_hypothesis_ranking = _questionnaire_baseline_hypothesis_ranking_from_cache(cache_row)
+        if questionnaire_baseline_hypothesis_ranking is None:
+            baseline_analysis = await resolve_patient_analysis(
+                patient_id,
+                request,
+                ClinicalContextPayload(),
+                force=True,
+                persist_cache=False,
+            )
+            questionnaire_baseline_hypothesis_ranking = [
+                row.model_dump() for row in baseline_analysis.hypothesis_ranking
+            ]
+        base_payload["questionnaire_baseline_hypothesis_ranking"] = questionnaire_baseline_hypothesis_ranking
 
     next_mode = "resting" if questionnaire_state else "active"
     anchor_vitals = _analysis_anchor(last_vitals, alerts) if next_mode == "resting" else None
@@ -781,21 +812,24 @@ async def resolve_patient_analysis(
         if next_mode == "resting"
         else "Analyse clinique actualisee"
     )
-    cache_row = services.postgres.upsert_analysis_cache(
-        patient_id=patient_id,
-        analysis_type=ANALYSIS_CACHE_TYPE,
-        fingerprint=fingerprint,
-        payload=base_payload,
-        summary_text=summary_text,
-        questionnaire=questionnaire_state,
-        analysis_state=next_mode,
-        anchor_vitals=anchor_vitals,
-        delta_signals=[],
-        trigger_reason=trigger_reason,
-        source=source,
-        llm_status=llm_status,
-    )
-    services.postgres.store_note(patient_id=patient_id, content=summary_text, source=source)
+    generated_at = None
+    if persist_cache:
+        cache_row = services.postgres.upsert_analysis_cache(
+            patient_id=patient_id,
+            analysis_type=ANALYSIS_CACHE_TYPE,
+            fingerprint=fingerprint,
+            payload=base_payload,
+            summary_text=summary_text,
+            questionnaire=questionnaire_state,
+            analysis_state=next_mode,
+            anchor_vitals=anchor_vitals,
+            delta_signals=[],
+            trigger_reason=trigger_reason,
+            source=source,
+            llm_status=llm_status,
+        )
+        services.postgres.store_note(patient_id=patient_id, content=summary_text, source=source)
+        generated_at = cache_row.get("generated_at")
     return ClinicalPackageResponse.model_validate(
         {
             "source": source,
@@ -804,7 +838,7 @@ async def resolve_patient_analysis(
             "analysis_state": _analysis_state_payload(
                 mode=next_mode,
                 cache_status="fresh",
-                generated_at=cache_row.get("generated_at"),
+                generated_at=generated_at,
                 delta_signals=[],
                 trigger_reason=trigger_reason,
                 anchor_vitals=anchor_vitals,

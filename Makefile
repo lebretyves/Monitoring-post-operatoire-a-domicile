@@ -27,3 +27,22 @@ llm-up:
 
 llm-pull:
 	powershell -ExecutionPolicy Bypass -File .\scripts\setup_ollama_model.ps1
+
+# Type checking et qualité de code
+check-frontend:
+	cd services/frontend && npm run typecheck
+
+check-backend:
+	docker compose exec backend mypy app/
+
+lint-backend:
+	docker compose exec backend ruff check app/
+
+format-backend:
+	docker compose exec backend ruff format app/
+
+check-all: check-frontend check-backend lint-backend
+
+pre-commit: check-all test-backend
+	@echo "✓ Toutes les vérifications passées"
+

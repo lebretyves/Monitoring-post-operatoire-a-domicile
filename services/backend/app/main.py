@@ -159,6 +159,31 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
             },
         }
 
+    @app.get("/health/llm")
+    async def health_llm():
+        """
+        Healthcheck approfondi du LLM : vérifie qu'une génération réelle fonctionne.
+        Plus lent que /health, mais détecte les problèmes de cold start, timeout, et génération.
+        """
+        llm_service_reachable = await app.state.services.llm_client.is_available(timeout_seconds=2)
+        llm_model_installed = await app.state.services.llm_client.is_model_installed(timeout_seconds=2)
+        llm_generation_works = await app.state.services.llm_client.probe_generation(timeout_seconds=12)
+        
+        overall_status = "healthy" if (llm_service_reachable and llm_model_installed and llm_generation_works) else "degraded"
+        
+        return {
+            "status": overall_status,
+            "llm": {
+                "enabled": settings.enable_llm,
+                "model": settings.ollama_model,
+                "base_url": settings.ollama_base_url,
+                "service_reachable": llm_service_reachable,
+                "model_installed": llm_model_installed,
+                "generation_works": llm_generation_works,
+                "fully_operational": llm_service_reachable and llm_model_installed and llm_generation_works,
+            },
+        }
+
     @app.websocket("/ws/live")
     async def websocket_live(websocket: WebSocket):
         manager = app.state.services.ws_manager

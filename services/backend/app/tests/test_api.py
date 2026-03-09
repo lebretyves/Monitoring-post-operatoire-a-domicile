@@ -206,6 +206,132 @@ def test_patients_and_trends_endpoints() -> None:
             os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
 
 
+def test_health_endpoints() -> None:
+    """Test both lightweight and deep LLM healthcheck endpoints."""
+    app = create_app(test_mode=True)
+    with TestClient(app) as client:
+        # Test lightweight health endpoint
+        health_response = client.get("/health")
+        assert health_response.status_code == 200
+        health_data = health_response.json()
+        assert health_data["status"] == "ok"
+        assert "llm" in health_data
+        assert "enabled" in health_data["llm"]
+        assert "service_reachable" in health_data["llm"]
+        assert "model_installed" in health_data["llm"]
+
+        # Test deep LLM health endpoint
+        health_llm_response = client.get("/health/llm")
+        assert health_llm_response.status_code == 200
+        health_llm_data = health_llm_response.json()
+        assert health_llm_data["status"] in ["healthy", "degraded"]
+        assert "llm" in health_llm_data
+        assert "generation_works" in health_llm_data["llm"]
+        assert "fully_operational" in health_llm_data["llm"]
+
+
+def test_export_pdf_contains_clinical_sections() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                history = [
+                    {
+                        "ts": "2026-03-04T08:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "respiratory_case_to_characterize",
+                        "scenario_label": "Detresse respiratoire a caracteriser",
+                        "hr": 80,
+                        "spo2": 97,
+                        "sbp": 124,
+                        "dbp": 78,
+                        "map": 93,
+                        "rr": 16,
+                        "temp": 36.8,
+                        "room": "A102",
+                        "battery": 96,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(80 / 124, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T14:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "respiratory_case_to_characterize",
+                        "scenario_label": "Detresse respiratoire a caracteriser",
+                        "hr": 106,
+                        "spo2": 93,
+                        "sbp": 118,
+                        "dbp": 74,
+                        "map": 89,
+                        "rr": 24,
+                        "temp": 38.2,
+                        "room": "A102",
+                        "battery": 94,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(106 / 118, 2),
+                    },
+                ]
+                for reading in history:
+                    services.state.push(reading)
+                    services.influx.write_vital(reading)
+                services.last_vitals["PAT-002"] = history[-1]
+
+                questionnaire_response = client.post(
+                    "/api/llm/PAT-002/clinical-package",
+                    json={
+                        "questionnaire": {
+                            "responder": "ide",
+                            "comment": "essoufflement brutal avec douleur pleurale et mollet gonfle",
+                            "answers": [
+                                {
+                                    "module_id": "respiratory_differential",
+                                    "question_id": "dyspnea_onset",
+                                    "answer": "brutal",
+                                },
+                                {
+                                    "module_id": "respiratory_differential",
+                                    "question_id": "chest_pain_type",
+                                    "answer": "pleurale",
+                                },
+                                {
+                                    "module_id": "respiratory_differential",
+                                    "question_id": "calf_pain_swelling",
+                                    "answer": "yes",
+                                },
+                            ],
+                        }
+                    },
+                )
+                assert questionnaire_response.status_code == 200
+
+                response = client.get("/api/export/PAT-002/pdf")
+                assert response.status_code == 200
+                assert response.headers["content-type"].startswith("application/pdf")
+                assert "PAT-002-report.pdf" in response.headers["content-disposition"]
+
+                payload = response.content.decode("latin-1", errors="ignore")
+                assert "Compte rendu clinique post-operatoire" in payload
+                assert "Home Track" in payload
+                assert "Date/heure" in payload
+                assert "PAT-002" in payload
+                assert "Hypotheses cliniques IA" in payload
+                assert "Questionnaire differentiel" in payload
+                assert "Conduite a tenir / surveillance" in payload
+                assert "Impact du questionnaire differentiel" in payload
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
 def test_historical_points_seed_state_and_store_backfill_alerts() -> None:
     previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
     try:
@@ -603,8 +729,20 @@ def test_clinical_package_reranks_from_questionnaire_clues() -> None:
                 assert questionnaire_payload["source"] == "rule-based"
                 assert questionnaire_payload["hypothesis_ranking"][0]["label"] == "Embolie pulmonaire possible"
                 assert questionnaire_payload["hypothesis_ranking"][0]["compatibility_percent"] > 40
+                assert (
+                    questionnaire_payload["questionnaire_baseline_hypothesis_ranking"][0]["label"]
+                    == baseline_payload["hypothesis_ranking"][0]["label"]
+                )
                 assert sum(row["compatibility_percent"] for row in questionnaire_payload["hypothesis_ranking"]) == 100
                 assert "questionnaire differentiel" in questionnaire_payload["structured_synthesis"].lower()
+
+                cached_questionnaire_response = client.get("/api/llm/PAT-002/clinical-package")
+                assert cached_questionnaire_response.status_code == 200
+                cached_questionnaire_payload = cached_questionnaire_response.json()
+                assert (
+                    cached_questionnaire_payload["questionnaire_baseline_hypothesis_ranking"][0]["label"]
+                    == baseline_payload["hypothesis_ranking"][0]["label"]
+                )
     finally:
         if previous_runtime_dir is None:
             os.environ.pop("ML_RUNTIME_DIR", None)
@@ -702,6 +840,7 @@ def test_clinical_package_cache_and_resting_state_persist() -> None:
                 resting_payload = questionnaire_response.json()
                 assert resting_payload["analysis_state"]["mode"] == "resting"
                 assert resting_payload["questionnaire_state"]["answers"][0]["answer"] == "brutal"
+                assert resting_payload["questionnaire_baseline_hypothesis_ranking"]
 
                 updated_reading = {
                     **history[-1],
@@ -721,6 +860,7 @@ def test_clinical_package_cache_and_resting_state_persist() -> None:
                 assert stale_payload["analysis_state"]["mode"] == "stale"
                 assert stale_payload["analysis_state"]["cache_status"] == "stale"
                 assert stale_payload["analysis_state"]["delta_signals"]
+                assert stale_payload["questionnaire_baseline_hypothesis_ranking"]
                 assert stale_payload["summary_text"] == resting_payload["summary_text"]
     finally:
         if previous_runtime_dir is None:

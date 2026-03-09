@@ -22,7 +22,7 @@ export function DifferentialQuestionnaire({
   value,
   onChange,
   onSubmit,
-  collapsed = false,
+  collapsed = true,
   onToggleCollapsed,
   restState = "active",
   restMessage = "",
@@ -76,7 +76,7 @@ export function DifferentialQuestionnaire({
               onClick={onToggleCollapsed}
               style={toggleButtonStyle}
             >
-              {collapsed ? "Derouler" : "Replier"}
+              {collapsed ? "Ouvrir" : "Refermer"}
             </button>
           ) : null}
         </div>

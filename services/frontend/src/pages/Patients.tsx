@@ -90,54 +90,54 @@ export function PatientsPage() {
     <div style={{ display: "grid", gap: 20 }}>
       <section
         style={{
-          padding: 24,
-          borderRadius: 30,
+          padding: 20,
+          borderRadius: 26,
           background:
             "linear-gradient(180deg, rgba(5, 17, 30, 0.96), rgba(8, 31, 52, 0.96))",
           color: "#f8fafc",
-          boxShadow: "0 20px 38px rgba(2, 12, 27, 0.28)",
+          boxShadow: "0 18px 34px rgba(2, 12, 27, 0.26)",
           border: "1px solid rgba(125, 164, 203, 0.16)",
         }}
       >
         <div
           style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 18,
-            alignItems: "stretch",
+            display: "grid",
+            gap: 16,
+            gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+            alignItems: "start",
           }}
         >
-          <div style={{ display: "grid", gap: 16, flex: "1 1 580px", maxWidth: 700 }}>
+          <div style={{ display: "grid", gap: 14, minWidth: 0 }}>
             <div
               style={{
                 display: "inline-flex",
                 alignItems: "center",
-                gap: 8,
+                gap: 6,
                 width: "fit-content",
-                padding: "6px 10px",
+                padding: "4px 8px",
                 borderRadius: 999,
                 background: "rgba(94, 211, 255, 0.09)",
                 color: "#bfe9ff",
-                fontSize: 12,
+                fontSize: 11,
                 fontWeight: 800,
-                letterSpacing: 1,
+                letterSpacing: 0.9,
                 textTransform: "uppercase",
               }}
             >
               <span
                 style={{
-                  width: 10,
-                  height: 10,
+                  width: 8,
+                  height: 8,
                   borderRadius: 999,
                   background: "#38bdf8",
-                  boxShadow: "0 0 14px rgba(56, 189, 248, 0.72)",
+                  boxShadow: "0 0 12px rgba(56, 189, 248, 0.68)",
                 }}
               />
               Monitoring
             </div>
-            <div style={{ display: "grid", gap: 8 }}>
-              <h1 style={{ margin: 0, fontSize: 34, lineHeight: 1.05 }}>Monitoring post-operatoire a domicile</h1>
-              <div style={{ color: "#9fb6cb", fontSize: 14, maxWidth: 760 }}>
+            <div style={{ display: "grid", gap: 6, maxWidth: 640 }}>
+              <h1 style={{ margin: 0, fontSize: 28, lineHeight: 1.05 }}>Monitoring post-operatoire a domicile</h1>
+              <div style={{ color: "#9fb6cb", fontSize: 13, maxWidth: 560 }}>
                 Supervision temps reel des scopes patients, controle des alertes et priorisation clinique
                 assistee.
               </div>
@@ -145,32 +145,32 @@ export function PatientsPage() {
             <div
               style={{
                 display: "grid",
-                gap: 14,
-                gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                gap: 10,
+                gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
               }}
             >
               <div
                 style={{
-                  padding: "18px 20px",
-                  borderRadius: 18,
-                  border: "1px solid rgba(125, 164, 203, 0.16)",
-                  background: "linear-gradient(180deg, rgba(7, 22, 38, 0.92), rgba(8, 30, 50, 0.82))",
+                  padding: "14px 16px",
+                  borderRadius: 16,
+                  border: "1px solid rgba(125, 164, 203, 0.14)",
+                  background: "linear-gradient(180deg, rgba(7, 22, 38, 0.88), rgba(8, 30, 50, 0.78))",
                   display: "grid",
-                  gap: 10,
+                  gap: 8,
                   alignContent: "start",
                 }}
               >
-                <div style={{ color: "#88a1bb", fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase" }}>
+                <div style={{ color: "#88a1bb", fontSize: 10, letterSpacing: 1.3, textTransform: "uppercase" }}>
                   Flux temps reel
                 </div>
                 <div
                   style={{
-                    display: "inline-flex",
+                    display: "flex",
                     alignItems: "center",
-                    gap: 10,
-                    width: "fit-content",
-                    padding: "10px 14px",
-                    borderRadius: 14,
+                    justifyContent: "space-between",
+                    gap: 8,
+                    padding: "8px 10px",
+                    borderRadius: 12,
                     background: websocketBackground(wsStatus),
                     border: `1px solid ${websocketBorder(wsStatus)}`,
                     fontWeight: 800,
@@ -179,105 +179,98 @@ export function PatientsPage() {
                 >
                   <span
                     style={{
-                      width: 12,
-                      height: 12,
+                      width: 10,
+                      height: 10,
                       borderRadius: 999,
                       background: websocketColor(wsStatus),
-                      boxShadow: `0 0 14px ${websocketGlow(wsStatus)}`,
+                      boxShadow: `0 0 12px ${websocketGlow(wsStatus)}`,
                     }}
                   />
                   <span
-                    style={{ color: websocketLabelText(wsStatus), fontSize: 12, textTransform: "uppercase", letterSpacing: 1 }}
+                    style={{ color: websocketLabelText(wsStatus), fontSize: 10, textTransform: "uppercase", letterSpacing: 0.9 }}
                   >
                     WebSocket
                   </span>
-                  <span style={{ color: websocketText(wsStatus) }}>{formatWebsocketStatus(wsStatus)}</span>
+                  <span style={{ color: websocketText(wsStatus), fontSize: 13 }}>{formatWebsocketStatus(wsStatus)}</span>
                 </div>
-                <div style={{ color: "#8ea6bd", fontSize: 13 }}>Mise a jour live des constantes et alertes.</div>
+                <div style={{ color: "#8ea6bd", fontSize: 12 }}>Constantes et alertes synchronisees en direct.</div>
               </div>
 
               <div
                 style={{
-                  padding: "18px 20px",
-                  borderRadius: 18,
-                  border: "1px solid rgba(125, 164, 203, 0.16)",
-                  background: "linear-gradient(180deg, rgba(7, 22, 38, 0.92), rgba(8, 30, 50, 0.82))",
+                  padding: "14px 16px",
+                  borderRadius: 16,
+                  border: "1px solid rgba(125, 164, 203, 0.14)",
+                  background: "linear-gradient(180deg, rgba(7, 22, 38, 0.88), rgba(8, 30, 50, 0.78))",
                   display: "grid",
-                  gap: 14,
+                  gap: 6,
                 }}
               >
-                <div style={{ color: "#88a1bb", fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase" }}>
-                  Etat du service
+                <div style={{ color: "#88a1bb", fontSize: 10, letterSpacing: 1.3, textTransform: "uppercase" }}>
+                  Scopes
                 </div>
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <div
-                    style={{
-                      minWidth: 118,
-                      padding: "12px 14px",
-                      borderRadius: 14,
-                      background: "rgba(255, 255, 255, 0.04)",
-                      border: "1px solid rgba(125, 164, 203, 0.12)",
-                    }}
-                  >
-                    <div style={{ color: "#88a1bb", fontSize: 11, textTransform: "uppercase", letterSpacing: 1.2 }}>
-                      Scopes
-                    </div>
-                    <div style={{ marginTop: 6, fontSize: 26, fontWeight: 800 }}>{patients.length}</div>
-                  </div>
-                  <div
-                    style={{
-                      minWidth: 118,
-                      padding: "12px 14px",
-                      borderRadius: 14,
-                      background: "rgba(255, 255, 255, 0.04)",
-                      border: "1px solid rgba(125, 164, 203, 0.12)",
-                    }}
-                  >
-                    <div style={{ color: "#88a1bb", fontSize: 11, textTransform: "uppercase", letterSpacing: 1.2 }}>
-                      Alertes
-                    </div>
-                    <div style={{ marginTop: 6, fontSize: 26, fontWeight: 800 }}>{recentAlertCount}</div>
-                  </div>
-                  <div
-                    style={{
-                      minWidth: 160,
-                      padding: "12px 14px",
-                      borderRadius: 14,
-                      background: "rgba(255, 255, 255, 0.04)",
-                      border: "1px solid rgba(125, 164, 203, 0.12)",
-                    }}
-                  >
-                    <div style={{ color: "#88a1bb", fontSize: 11, textTransform: "uppercase", letterSpacing: 1.2 }}>
-                      Patients tries
-                    </div>
-                    <div style={{ marginTop: 6, fontSize: 26, fontWeight: 800 }}>
-                      {prioritizedPatients.length}
-                    </div>
-                  </div>
+                <div style={{ fontSize: 24, fontWeight: 800 }}>{patients.length}</div>
+                <div style={{ color: "#8ea6bd", fontSize: 12 }}>Moniteurs actifs sur le tableau de bord.</div>
+              </div>
+
+              <div
+                style={{
+                  padding: "14px 16px",
+                  borderRadius: 16,
+                  border: "1px solid rgba(125, 164, 203, 0.14)",
+                  background: "linear-gradient(180deg, rgba(7, 22, 38, 0.88), rgba(8, 30, 50, 0.78))",
+                  display: "grid",
+                  gap: 6,
+                }}
+              >
+                <div style={{ color: "#88a1bb", fontSize: 10, letterSpacing: 1.3, textTransform: "uppercase" }}>
+                  Alertes
                 </div>
+                <div style={{ fontSize: 24, fontWeight: 800 }}>{recentAlertCount}</div>
+                <div style={{ color: "#8ea6bd", fontSize: 12 }}>Alertes visibles et non purgees du flux recent.</div>
+              </div>
+
+              <div
+                style={{
+                  padding: "14px 16px",
+                  borderRadius: 16,
+                  border: "1px solid rgba(125, 164, 203, 0.14)",
+                  background: "linear-gradient(180deg, rgba(7, 22, 38, 0.88), rgba(8, 30, 50, 0.78))",
+                  display: "grid",
+                  gap: 6,
+                }}
+              >
+                <div style={{ color: "#88a1bb", fontSize: 10, letterSpacing: 1.3, textTransform: "uppercase" }}>
+                  Patients tries
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 800 }}>{prioritizedPatients.length}</div>
+                <div style={{ color: "#8ea6bd", fontSize: 12 }}>{prioritizationLabel}</div>
               </div>
             </div>
           </div>
 
           <aside
             style={{
-              flex: "0 1 380px",
-              minWidth: 320,
-              padding: 20,
-              borderRadius: 22,
-              border: "1px solid rgba(125, 164, 203, 0.16)",
-              background: "linear-gradient(180deg, rgba(8, 22, 36, 0.94), rgba(8, 25, 42, 0.88))",
+              minWidth: 0,
+              padding: 18,
+              borderRadius: 20,
+              border: "1px solid rgba(125, 164, 203, 0.14)",
+              background: "linear-gradient(180deg, rgba(8, 22, 36, 0.92), rgba(8, 25, 42, 0.86))",
               display: "grid",
-              gap: 14,
+              gap: 12,
+              alignContent: "start",
             }}
           >
             <div style={{ display: "grid", gap: 4 }}>
-              <div style={{ color: "#88a1bb", fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase" }}>
+              <div style={{ color: "#88a1bb", fontSize: 10, letterSpacing: 1.3, textTransform: "uppercase" }}>
                 Operations de supervision
               </div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: "#f4f8fb" }}>Actions operateur</div>
+              <div style={{ fontSize: 17, fontWeight: 700, color: "#f4f8fb" }}>Actions operateur</div>
+              <div style={{ color: "#8ea6bd", fontSize: 12 }}>
+                Rafraichissement de la demo et relance du tri clinique depuis un panneau plus compact.
+              </div>
             </div>
-            <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
               <button
                 type="button"
                 disabled={refreshing}
@@ -299,7 +292,7 @@ export function PatientsPage() {
                   border: 0,
                   background: refreshing ? "#64748b" : "#facc15",
                   color: "#0f172a",
-                  padding: "11px 14px",
+                  padding: "12px 14px",
                   borderRadius: 12,
                   cursor: refreshing ? "default" : "pointer",
                   fontWeight: 800,
@@ -317,7 +310,7 @@ export function PatientsPage() {
                   border: 0,
                   background: prioritizing ? "#64748b" : "#e2e8f0",
                   color: "#0f172a",
-                  padding: "11px 14px",
+                  padding: "12px 14px",
                   borderRadius: 12,
                   cursor: prioritizing ? "default" : "pointer",
                   fontWeight: 800,
@@ -328,18 +321,21 @@ export function PatientsPage() {
             </div>
             <div
               style={{
-                padding: "14px 16px",
-                borderRadius: 16,
+                padding: "12px 14px",
+                borderRadius: 14,
                 background: "rgba(255, 255, 255, 0.04)",
                 border: "1px solid rgba(125, 164, 203, 0.12)",
                 display: "grid",
-                gap: 8,
+                gap: 6,
               }}
             >
-              <div style={{ color: "#88a1bb", fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase" }}>
+              <div style={{ color: "#88a1bb", fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase" }}>
                 Source priorisation
               </div>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#dbe8f5" }}>{prioritizationLabel}</div>
+              <div style={{ color: "#8ea6bd", fontSize: 12 }}>
+                Bascule automatiquement entre Ollama et le fallback local selon la disponibilite.
+              </div>
             </div>
           </aside>
         </div>

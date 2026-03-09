@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 
 import type { PatientSummary, VitalPayload } from "../types/vitals";
@@ -158,7 +158,7 @@ export function PatientMonitorStrip({
     );
   }
 
-  const rightRailReadouts = [
+  const numericRailReadouts = [
     {
       key: "hr",
       label: "FC",
@@ -168,6 +168,16 @@ export function PatientMonitorStrip({
       color: MONITOR_COLORS.hr,
       metricId: "hr" as AlarmMetricId,
       alert: metricStates.hr.outOfRange,
+    },
+    {
+      key: "sbp",
+      label: "TA",
+      value: `${Math.round(vitals.sbp)}/${Math.round(vitals.dbp)}`,
+      unit: "mmHg",
+      detail: `TAM ${Math.round(vitals.map)}`,
+      color: MONITOR_COLORS.sbp,
+      metricId: "sbp" as AlarmMetricId,
+      alert: metricStates.sbp.outOfRange,
     },
     {
       key: "spo2",
@@ -189,40 +199,40 @@ export function PatientMonitorStrip({
       metricId: "rr" as AlarmMetricId,
       alert: metricStates.rr.outOfRange,
     },
+  ];
+
+  const alignedWaveRows = [
     {
-      key: "sbp",
-      label: "PAS",
-      value: `${Math.round(vitals.sbp)}`,
-      unit: "mmHg",
-      detail: `PAD ${Math.round(vitals.dbp)}  TAM ${Math.round(vitals.map)}`,
-      color: MONITOR_COLORS.sbp,
-      metricId: "sbp" as AlarmMetricId,
-      alert: metricStates.sbp.outOfRange,
+      key: "ecg",
+      waveLabel: "ECG",
+      color: MONITOR_COLORS.hr,
+      signal: monitorSignals.ecg,
+      readout: numericRailReadouts[0],
     },
     {
-      key: "temp",
-      label: "TEMP",
-      value: `${vitals.temp.toFixed(1)}`,
-      unit: "C",
-      detail: formatLimitSummary(metricStates.temp.limits),
-      color: MONITOR_COLORS.temp,
-      metricId: "temp" as AlarmMetricId,
-      alert: metricStates.temp.outOfRange,
+      key: "ta",
+      waveLabel: "TA",
+      color: MONITOR_COLORS.sbp,
+      signal: monitorSignals.art,
+      readout: numericRailReadouts[1],
+    },
+    {
+      key: "spo2",
+      waveLabel: "SpO2",
+      color: MONITOR_COLORS.spo2,
+      signal: monitorSignals.pleth,
+      readout: numericRailReadouts[2],
+    },
+    {
+      key: "fr",
+      waveLabel: "FR",
+      color: MONITOR_COLORS.rr,
+      signal: monitorSignals.resp,
+      readout: numericRailReadouts[3],
     },
   ];
 
-  const footerReadouts = [
-    { key: "hr", label: "FC", value: `${Math.round(vitals.hr)}`, color: MONITOR_COLORS.hr, metricId: "hr" as AlarmMetricId, alert: metricStates.hr.outOfRange },
-    { key: "spo2", label: "SpO2", value: `${Math.round(vitals.spo2)}%`, color: MONITOR_COLORS.spo2, metricId: "spo2" as AlarmMetricId, alert: metricStates.spo2.outOfRange },
-    { key: "sbp", label: "PAS", value: `${Math.round(vitals.sbp)}`, color: MONITOR_COLORS.sbp, metricId: "sbp" as AlarmMetricId, alert: metricStates.sbp.outOfRange },
-    { key: "dbp", label: "PAD", value: `${Math.round(vitals.dbp)}`, color: "#ff9b9f" },
-    { key: "map", label: "TAM", value: `${Math.round(vitals.map)}`, color: "#ffc2c4" },
-    { key: "rr", label: "FR", value: `${Math.round(vitals.rr)}`, color: MONITOR_COLORS.rr, metricId: "rr" as AlarmMetricId, alert: metricStates.rr.outOfRange },
-    { key: "temp", label: "TEMP", value: `${vitals.temp.toFixed(1)}`, color: MONITOR_COLORS.temp, metricId: "temp" as AlarmMetricId, alert: metricStates.temp.outOfRange },
-    { key: "shock", label: "I CHOC", value: `${(vitals.shock_index ?? vitals.hr / Math.max(vitals.sbp, 1)).toFixed(2)}`, color: "#dbe8f5" },
-    { key: "battery", label: "BATT", value: `${Math.round(vitals.battery)}%`, color: "#dbe8f5" },
-    { key: "time", label: "HEURE", value: formatMonitorTime(vitals.ts), color: "#dbe8f5" },
-  ];
+  const metricTileWidth = valuesOnly ? 90 : compact ? 116 : 152;
 
   return (
     <article
@@ -230,8 +240,8 @@ export function PatientMonitorStrip({
         position: "relative",
         background:
           "radial-gradient(circle at top right, rgba(30, 64, 175, 0.18), transparent 28%), linear-gradient(180deg, #07111b, #050b12 72%)",
-        borderRadius: compact || valuesOnly ? 18 : 24,
-        padding: compact || valuesOnly ? 14 : 18,
+        borderRadius: compact || valuesOnly ? 20 : 26,
+        padding: compact || valuesOnly ? 16 : 20,
         color: "#e2eefb",
         boxShadow: "0 18px 34px rgba(2, 6, 23, 0.22)",
         border: "1px solid rgba(71, 111, 160, 0.24)"
@@ -267,7 +277,7 @@ export function PatientMonitorStrip({
         <div
           style={{
             display: "grid",
-            gap: 10,
+            gap: 8,
             borderRadius: 16,
             background: "linear-gradient(180deg, rgba(8, 20, 32, 0.96), rgba(4, 10, 18, 0.96))",
             border: "1px solid rgba(71, 111, 160, 0.18)",
@@ -330,11 +340,11 @@ export function PatientMonitorStrip({
                 </div>
               </div>
             </div>
-            <div style={{ display: "grid", gap: 7 }}>
-              {rightRailReadouts.map((readout) => (
-                <MetricRailTile
-                  key={readout.key}
-                  label={readout.label}
+              <div style={{ display: "grid", gap: 7 }}>
+                {numericRailReadouts.map((readout) => (
+                  <MetricRailTile
+                    key={readout.key}
+                    label={readout.label}
                   value={readout.value}
                   unit={readout.unit}
                   detail={readout.detail}
@@ -344,94 +354,107 @@ export function PatientMonitorStrip({
                   alert={readout.alert}
                   onClick={() => setActiveMetric((current) => (current === readout.metricId ? null : readout.metricId))}
                 />
-              ))}
+                ))}
+              </div>
             </div>
+
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                marginTop: 2,
+                width: metricTileWidth,
+                marginLeft: "auto",
+              }}
+            >
+              <MetricRailTile
+                label="TEMP"
+                value={`${vitals.temp.toFixed(1)}`}
+                unit="C"
+                detail={formatLimitSummary(metricStates.temp.limits)}
+                color={MONITOR_COLORS.temp}
+                compact
+                active={activeMetric === "temp"}
+                alert={metricStates.temp.outOfRange}
+                onClick={() => setActiveMetric((current) => (current === "temp" ? null : "temp"))}
+              />
+            </div>
+
+            {showDetailLink ? <div style={{ display: "flex", justifyContent: "flex-end" }}><Link to={`/patients/${patient.id}`} style={{ ...detailLinkStyle, padding: "8px 10px", borderRadius: 10, fontSize: 11 }}>Voir fiche</Link></div> : null}
           </div>
-
-          <MonitorFooterStrip
-            items={footerReadouts}
-            compact
-            activeMetric={activeMetric}
-            onSelectMetric={(metricId) => setActiveMetric((current) => (current === metricId ? null : metricId))}
-          />
-
-          {showDetailLink ? <div style={{ display: "flex", justifyContent: "flex-end" }}><Link to={`/patients/${patient.id}`} style={{ ...detailLinkStyle, padding: "8px 10px", borderRadius: 10, fontSize: 11 }}>Voir fiche</Link></div> : null}
-        </div>
       ) : (
         <>
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: compact ? "minmax(0, 1fr) 116px" : "minmax(0, 1fr) 152px",
-              gap: compact ? 8 : 12,
-              alignItems: "stretch",
+              gap: compact ? 10 : 12,
+              borderRadius: compact ? 16 : 20,
+              background: "linear-gradient(180deg, rgba(8, 20, 32, 0.96), rgba(4, 10, 18, 0.96))",
+              border: "1px solid rgba(71, 111, 160, 0.18)",
+              padding: compact ? 12 : 14,
+              boxShadow: "inset 0 0 0 1px rgba(148, 184, 224, 0.04)",
             }}
           >
             <div
               style={{
                 display: "grid",
-                gridTemplateRows: compact ? "repeat(4, minmax(42px, 1fr))" : "repeat(4, minmax(54px, 1fr))",
                 gap: compact ? 6 : 8,
-                background: "rgba(7, 18, 30, 0.58)",
-                borderRadius: compact ? 16 : 20,
-                padding: compact ? 10 : 12,
-                border: "1px solid rgba(71, 111, 160, 0.18)"
               }}
             >
-              <WaveRow
-                label="ECG"
-                color={MONITOR_COLORS.hr}
-                signal={monitorSignals.ecg}
-                sweepProgress={sweepProgress}
-                compact={compact}
-              />
-              <WaveRow
-                label="TA"
-                color={MONITOR_COLORS.sbp}
-                signal={monitorSignals.art}
-                sweepProgress={sweepProgress}
-                compact={compact}
-              />
-              <WaveRow
-                label="SpO2"
-                color={MONITOR_COLORS.spo2}
-                signal={monitorSignals.pleth}
-                sweepProgress={sweepProgress}
-                compact={compact}
-              />
-              <WaveRow
-                label="FR"
-                color={MONITOR_COLORS.rr}
-                signal={monitorSignals.resp}
-                sweepProgress={sweepProgress}
-                compact={compact}
-              />
-            </div>
-
-            <div style={{ display: "grid", gap: compact ? 7 : 8 }}>
-              {rightRailReadouts.map((readout) => (
-                <MetricRailTile
-                  key={readout.key}
-                  label={readout.label}
-                  value={readout.value}
-                  unit={readout.unit}
-                  detail={readout.detail}
-                  color={readout.color}
-                  compact={compact}
-                  active={activeMetric === readout.metricId}
-                  alert={readout.alert}
-                  onClick={() => setActiveMetric((current) => (current === readout.metricId ? null : readout.metricId))}
-                />
+              {alignedWaveRows.map((row) => (
+                <div
+                  key={row.key}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: compact ? "minmax(0, 1fr) 116px" : "minmax(0, 1fr) 152px",
+                    gap: compact ? 8 : 12,
+                    alignItems: "center",
+                  }}
+                >
+                  <WaveRow
+                    label={row.waveLabel}
+                    color={row.color}
+                    signal={row.signal}
+                    sweepProgress={sweepProgress}
+                    compact={compact}
+                  />
+                  <MetricRailTile
+                    label={row.readout.label}
+                    value={row.readout.value}
+                    unit={row.readout.unit}
+                    detail={row.readout.detail}
+                    color={row.readout.color}
+                    compact={compact}
+                    active={activeMetric === row.readout.metricId}
+                    alert={row.readout.alert}
+                    onClick={() => setActiveMetric((current) => (current === row.readout.metricId ? null : row.readout.metricId))}
+                  />
+                </div>
               ))}
+
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  paddingTop: compact ? 2 : 4,
+                  width: metricTileWidth,
+                  marginLeft: "auto",
+                }}
+              >
+                <MetricRailTile
+                  label="TEMP"
+                  value={`${vitals.temp.toFixed(1)}`}
+                  unit="C"
+                  detail={formatLimitSummary(metricStates.temp.limits)}
+                  color={MONITOR_COLORS.temp}
+                  compact={compact}
+                  active={activeMetric === "temp"}
+                  alert={metricStates.temp.outOfRange}
+                  onClick={() => setActiveMetric((current) => (current === "temp" ? null : "temp"))}
+                />
+              </div>
             </div>
           </div>
-
-          <MonitorFooterStrip
-            items={footerReadouts}
-            compact={compact}
-            activeMetric={activeMetric}
-            onSelectMetric={(metricId) => setActiveMetric((current) => (current === metricId ? null : metricId))}
-          />
         </>
       )}
 
@@ -582,7 +605,7 @@ function MetricRailTile({
     border: `1px solid ${alert || active ? color : "rgba(159, 185, 215, 0.16)"}`,
     background: alert ? "rgba(119, 24, 39, 0.28)" : "rgba(7, 18, 30, 0.88)",
     color: "#eff7ff",
-    padding: compact ? "8px 10px" : "10px 12px",
+    padding: compact ? "7px 9px" : "9px 11px",
     display: "grid",
     gap: compact ? 2 : 4,
     alignContent: "center",
@@ -600,7 +623,7 @@ function MetricRailTile({
         style={{
           color,
           fontWeight: 900,
-          fontSize: compact ? 26 : label === "PAS" ? 30 : 34,
+          fontSize: compact ? 24 : label === "TA" ? 26 : 32,
           lineHeight: 0.95,
           fontVariantNumeric: "tabular-nums",
           textShadow: `0 0 16px ${hexToRgba(color, 0.3)}`,
@@ -626,44 +649,63 @@ function MetricRailTile({
 function MonitorFooterStrip({
   items,
   compact = false,
+  embedded = false,
   activeMetric,
   onSelectMetric,
 }: {
   items: Array<{ key: string; label: string; value: string; color: string; metricId?: AlarmMetricId; alert?: boolean }>;
   compact?: boolean;
+  embedded?: boolean;
   activeMetric: AlarmMetricId | null;
   onSelectMetric: (metricId: AlarmMetricId) => void;
 }) {
   return (
     <div
       style={{
-        marginTop: 12,
+        marginTop: embedded ? 0 : 12,
         display: "grid",
         gridTemplateColumns: compact
-          ? "repeat(auto-fit, minmax(82px, 1fr))"
-          : "repeat(auto-fit, minmax(94px, 1fr))",
-        gap: 8,
+          ? `repeat(auto-fit, minmax(${embedded ? 56 : 82}px, 1fr))`
+          : `repeat(auto-fit, minmax(${embedded ? 62 : 94}px, 1fr))`,
+        gap: embedded ? 0 : 8,
+        paddingTop: embedded ? 8 : 0,
+        borderTop: embedded ? "1px solid rgba(71, 111, 160, 0.16)" : "none",
       }}
     >
       {items.map((item) => {
         const tileStyle: CSSProperties = {
           width: "100%",
           textAlign: "left",
-          borderRadius: 12,
-          border: `1px solid ${item.alert || activeMetric === item.metricId ? item.color : "rgba(159, 185, 215, 0.14)"}`,
-          background: item.alert ? "rgba(119, 24, 39, 0.22)" : "rgba(8, 19, 31, 0.92)",
+          borderRadius: embedded ? 0 : 12,
+          border: embedded
+            ? "0"
+            : `1px solid ${item.alert || activeMetric === item.metricId ? item.color : "rgba(159, 185, 215, 0.14)"}`,
+          borderLeft: embedded ? "1px solid rgba(71, 111, 160, 0.14)" : undefined,
+          background: embedded
+            ? item.alert
+              ? "rgba(119, 24, 39, 0.12)"
+              : "transparent"
+            : item.alert
+              ? "rgba(119, 24, 39, 0.22)"
+              : "rgba(8, 19, 31, 0.92)",
           color: "#eff7ff",
-          padding: compact ? "8px 9px" : "9px 10px",
+          padding: embedded
+            ? compact
+              ? "6px 7px"
+              : "7px 8px"
+            : compact
+              ? "8px 9px"
+              : "9px 10px",
           display: "grid",
-          gap: 4,
-          boxShadow: activeMetric === item.metricId ? `0 0 0 1px ${item.color}` : "none",
+          gap: embedded ? 2 : 4,
+          boxShadow: embedded ? "none" : activeMetric === item.metricId ? `0 0 0 1px ${item.color}` : "none",
           cursor: item.metricId ? "pointer" : "default",
         };
 
         const content = (
           <>
-            <div style={{ color: item.color, fontSize: compact ? 9 : 10, fontWeight: 800, letterSpacing: 0.8 }}>{item.label}</div>
-            <div style={{ fontWeight: 900, fontSize: compact ? 16 : 18, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
+            <div style={{ color: item.color, fontSize: embedded ? 8 : compact ? 9 : 10, fontWeight: 800, letterSpacing: 0.8 }}>{item.label}</div>
+            <div style={{ fontWeight: 900, fontSize: embedded ? (compact ? 12 : 13) : compact ? 16 : 18, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
               {item.value}
             </div>
           </>
@@ -791,7 +833,7 @@ function AlarmEditor({
 function Grid({ width, height }: { width: number; height: number }) {
   const majorStep = 32;
   const minorStep = 8;
-  const lines: JSX.Element[] = [];
+  const lines: React.ReactElement[] = [];
 
   for (let x = 0; x <= width; x += minorStep) {
     lines.push(
