@@ -44,6 +44,15 @@ import type {
 } from "../types/vitals";
 
 type AnalysisRestMode = "active" | "resting" | "stale";
+type PathologyOptionValue =
+  | "stable"
+  | "sepsis"
+  | "hemorragie"
+  | "embolie_pulmonaire"
+  | "respiratoire"
+  | "cardiaque"
+  | "douleur"
+  | "autre";
 
 interface AnalysisRestState {
   mode: AnalysisRestMode;
@@ -64,6 +73,16 @@ const EMPTY_CLINICAL_CONTEXT: ClinicalContextSelection = {
   perioperative_context: [],
   free_text: "",
 };
+const PATHOLOGY_OPTIONS: Array<{ value: PathologyOptionValue; label: string }> = [
+  { value: "stable", label: "Etat post-operatoire stable" },
+  { value: "sepsis", label: "Sepsis / complication infectieuse" },
+  { value: "hemorragie", label: "Hemorragie / hypovolemie" },
+  { value: "embolie_pulmonaire", label: "Embolie pulmonaire" },
+  { value: "respiratoire", label: "Complication respiratoire post-op" },
+  { value: "cardiaque", label: "Complication cardiaque post-op" },
+  { value: "douleur", label: "Douleur post-op non controlee" },
+  { value: "autre", label: "Autre (preciser dans le commentaire)" },
+];
 
 export function PatientDetailPage() {
   const { patientId = "" } = useParams();
@@ -84,7 +103,7 @@ export function PatientDetailPage() {
   const [hours, setHours] = useState(0);
   const [wsStatus, setWsStatus] = useState("connecting");
   const [mlPrediction, setMlPrediction] = useState<MlPredictionResponse | null>(null);
-  const [mlPathology, setMlPathology] = useState("");
+  const [mlPathology, setMlPathology] = useState<PathologyOptionValue>("autre");
   const [mlComment, setMlComment] = useState("");
   const [pathologyReviewStatus, setPathologyReviewStatus] = useState<PathologyReviewStatus>("pending");
   const [terrainGuidanceStatus, setTerrainGuidanceStatus] = useState("idle");
@@ -318,7 +337,16 @@ export function PatientDetailPage() {
       }
       setAlerts(caseAlerts);
       setMlPrediction(prediction);
-      setMlPathology(prediction?.pathology ?? currentPathology);
+      const reviewedPathology =
+        prediction?.recent_feedback.find(
+          (feedback) => feedback.diagnosis_decision === "validated" || feedback.diagnosis_decision === "rejected"
+        )?.final_diagnosis_class
+        ?? prediction?.recent_feedback.find(
+          (feedback) => feedback.diagnosis_decision === "validated" || feedback.diagnosis_decision === "rejected"
+        )?.final_diagnosis
+        ?? prediction?.pathology
+        ?? currentPathology;
+      setMlPathology(inferPathologyOption(reviewedPathology));
     };
     if (patientId && currentPathology && currentSurgeryType) {
       loadClinicalContext().catch(console.error);
@@ -509,8 +537,16 @@ export function PatientDetailPage() {
     setMlStatus("loading");
     try {
       const prediction = await getMlPrediction(patientId);
+      const reviewedPathology =
+        prediction.recent_feedback.find(
+          (feedback) => feedback.diagnosis_decision === "validated" || feedback.diagnosis_decision === "rejected"
+        )?.final_diagnosis_class
+        ?? prediction.recent_feedback.find(
+          (feedback) => feedback.diagnosis_decision === "validated" || feedback.diagnosis_decision === "rejected"
+        )?.final_diagnosis
+        ?? prediction.pathology;
       setMlPrediction(prediction);
-      setMlPathology(prediction.pathology);
+      setMlPathology(inferPathologyOption(reviewedPathology));
       setMlMessage(
         prediction.model_ready
           ? `Score mis a jour pour ${prediction.pathology} / ${prediction.sample.surgery_type ?? "chirurgie en cours"}`
@@ -532,7 +568,7 @@ export function PatientDetailPage() {
       const response = await submitMlFeedback(patientId, {
         decision,
         target,
-        pathology: mlPathology.trim() || mlPrediction?.pathology || currentPathology,
+        pathology: mlPrediction?.pathology || currentPathology,
         comment: mlComment.trim()
       });
       setMlMessage(
@@ -551,8 +587,8 @@ export function PatientDetailPage() {
     if (!patientId || status === "pending") {
       return;
     }
-    const finalDiagnosis = mlPathology.trim();
     const reason = mlComment.trim();
+    const finalDiagnosis = getPathologyLabel(mlPathology);
     if (!finalDiagnosis) {
       setMlMessage("Renseigne le diagnostic final avant validation/refus.");
       return;
@@ -561,13 +597,18 @@ export function PatientDetailPage() {
       setMlMessage("Ajoute le motif clinique avant validation/refus.");
       return;
     }
+    if (mlPathology === "autre" && reason.length < 8) {
+      setMlMessage("Pour 'Autre', precise la pathologie retenue dans le commentaire de validation.");
+      return;
+    }
     setMlStatus("saving");
     try {
       await submitMlFeedback(patientId, {
         decision: status === "validated" ? "validate" : "invalidate",
-        pathology: finalDiagnosis,
+        pathology: mlPrediction?.pathology || currentPathology,
         diagnosis_decision: status,
         final_diagnosis: finalDiagnosis,
+        final_diagnosis_class: mlPathology,
         comment: reason,
       });
       setPathologyReviewStatus(status);
@@ -718,6 +759,43 @@ export function PatientDetailPage() {
         <VitalChart points={points} rangeHours={hours} />
       </section>
 
+      <section style={{ background: "#ffffff", borderRadius: 18, padding: 18, boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)", display: "grid", gap: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <div>
+            <h3 style={{ margin: 0 }}>Validation ML</h3>
+            <div style={{ color: "#64748b", fontSize: 14 }}>
+              Le choix enregistre directement la bonne classe pour la combinaison pathologie + chirurgie.
+            </div>
+          </div>
+          <button type="button" onClick={() => refreshMlPrediction()} style={secondaryButton}>
+            Recalculer score
+          </button>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+          <MetricCard
+            label="Criticite immediate"
+            value={mlPrediction ? `${mlPrediction.immediate_criticality.score}%` : "N/A"}
+            accentColor={scoreAccentColor(mlPrediction?.immediate_criticality.level)}
+          />
+          <MetricCard
+            label="Risque evolutif"
+            value={mlPrediction ? `${mlPrediction.evolving_risk.score}%` : "N/A"}
+            accentColor={scoreAccentColor(mlPrediction?.evolving_risk.level)}
+          />
+          <MetricCard
+            label="Score ML historique"
+            value={
+              mlPrediction?.probability !== null && mlPrediction?.probability !== undefined
+                ? `${Math.round(mlPrediction.probability * 100)}%`
+                : "N/A"
+            }
+            accentColor="#0f172a"
+          />
+          <MetricCard label="Modele" value={mlPrediction?.model_ready ? "Pret" : "En attente"} />
+        </div>
+      </section>
+
       <ClinicalContextPanel
         value={clinicalContextSelection}
         onChange={setClinicalContextSelection}
@@ -732,64 +810,6 @@ export function PatientDetailPage() {
           Aucun antecedent renseigne: la conduite a tenir sera plus generaliste et moins precise.
         </div>
       ) : null}
-
-      <section style={{ background: "#ffffff", borderRadius: 18, padding: 16, boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)", display: "grid", gap: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ fontWeight: 800, color: "#0f172a" }}>Conduite a tenir (LLM a la demande)</div>
-          <button
-            type="button"
-            onClick={() => handleTerrainGuidance()}
-            style={darkButton}
-            disabled={!hasMedicalValidation || terrainGuidanceStatus === "loading"}
-          >
-            {terrainGuidanceStatus === "loading" ? "Generation..." : "Generer conduite a tenir"}
-          </button>
-        </div>
-        {!hasMedicalValidation ? (
-          <div style={{ color: "#b45309", fontSize: 13, fontWeight: 700 }}>
-            Validation medecin requise avant generation de la conduite a tenir.
-          </div>
-        ) : null}
-        {terrainGuidance ? (
-          <div style={{ display: "grid", gap: 10 }}>
-            <div style={{ color: "#334155", fontSize: 14 }}>
-              Source: {terrainGuidance.source} / {terrainGuidance.llm_status} - personnalisation: {terrainGuidance.personalization_level}
-            </div>
-            {terrainGuidance.warning ? (
-              <div style={{ color: "#b45309", fontSize: 13, fontWeight: 700 }}>{terrainGuidance.warning}</div>
-            ) : null}
-            <RiskExplainCard
-              title="Actions immediates"
-              level="priorite terrain"
-              items={terrainGuidance.immediate_actions}
-              emptyMessage="Aucune action immediate proposee."
-            />
-            <RiskExplainCard
-              title="Surveillance ciblee"
-              level="points de controle"
-              items={terrainGuidance.surveillance_points}
-              emptyMessage="Aucun point de surveillance specifique."
-            />
-            <RiskExplainCard
-              title="Criteres d'escalade"
-              level="securite"
-              items={terrainGuidance.escalation_triggers}
-              emptyMessage="Aucun critere d'escalade specifique."
-            />
-            <div style={{ borderRadius: 12, background: "#f8fafc", border: "1px solid #e2e8f0", padding: 12, display: "grid", gap: 8 }}>
-              <div style={{ fontWeight: 700, color: "#0f172a" }}>Resume de transmission retravaille</div>
-              <div style={{ color: "#334155", fontSize: 14 }}>{terrainGuidance.transmission_summary}</div>
-              <div style={{ color: "#64748b", fontSize: 13 }}>
-                Sources: {terrainGuidance.cited_sources.join(" ; ")}
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div style={{ color: "#64748b", fontSize: 14 }}>
-            Lance la generation pour obtenir une conduite a tenir contextualisee apres validation medecin.
-          </div>
-        )}
-      </section>
 
       <section>
         <div style={{ background: "#ffffff", borderRadius: 18, padding: 16, boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)" }}>
@@ -1036,43 +1056,6 @@ export function PatientDetailPage() {
       </section>
 
       <section style={{ background: "#ffffff", borderRadius: 18, padding: 18, boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)", display: "grid", gap: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <div>
-            <h3 style={{ margin: 0 }}>Validation ML</h3>
-            <div style={{ color: "#64748b", fontSize: 14 }}>
-              Le choix enregistre directement la bonne classe pour la combinaison pathologie + chirurgie.
-            </div>
-          </div>
-          <button type="button" onClick={() => refreshMlPrediction()} style={secondaryButton}>
-            Recalculer score
-          </button>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
-          <MetricCard
-            label="Criticite immediate"
-            value={mlPrediction ? `${mlPrediction.immediate_criticality.score}%` : "N/A"}
-            accentColor={scoreAccentColor(mlPrediction?.immediate_criticality.level)}
-          />
-          <MetricCard
-            label="Risque evolutif"
-            value={mlPrediction ? `${mlPrediction.evolving_risk.score}%` : "N/A"}
-            accentColor={scoreAccentColor(mlPrediction?.evolving_risk.level)}
-          />
-          <MetricCard
-            label="Score ML historique"
-            value={
-              mlPrediction?.probability !== null && mlPrediction?.probability !== undefined
-                ? `${Math.round(mlPrediction.probability * 100)}%`
-                : "N/A"
-            }
-            accentColor="#0f172a"
-          />
-          <MetricCard label="Modele" value={mlPrediction?.model_ready ? "Pret" : "En attente"} />
-          <MetricCard label="Pathologie" value={mlPrediction?.pathology ?? (currentPathology || "N/A")} />
-          <MetricCard label="Chirurgie" value={currentSurgeryType || "N/A"} />
-        </div>
-
         <div style={{ display: "grid", gap: 10 }}>
           <RiskExplainCard
             title="Seuils critiques immediats"
@@ -1090,12 +1073,20 @@ export function PatientDetailPage() {
 
         <label style={{ display: "grid", gap: 6, color: "#334155", fontWeight: 600 }}>
           Pathologie a confirmer
-          <input
+          <select
             value={mlPathology}
-            onChange={(event) => setMlPathology(event.target.value)}
-            placeholder="Ex: Hemorragie J+2"
+            onChange={(event) => setMlPathology(event.target.value as PathologyOptionValue)}
             style={textInput}
-          />
+          >
+            {PATHOLOGY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <div style={{ color: "#64748b", fontSize: 13, fontWeight: 500 }}>
+            Utilise une pathologie referencee pour eviter les variantes proches. Choisis `Autre` seulement si le detail est precise dans le commentaire.
+          </div>
         </label>
 
         <label style={{ display: "grid", gap: 6, color: "#334155", fontWeight: 600 }}>
@@ -1103,7 +1094,7 @@ export function PatientDetailPage() {
           <textarea
             value={mlComment}
             onChange={(event) => setMlComment(event.target.value)}
-            placeholder="Pourquoi je confirme ou j'infirme ce cas"
+            placeholder="Pourquoi je confirme ou j'infirme ce cas. Si 'Autre', preciser ici la pathologie exacte."
             rows={3}
             style={{ ...textInput, resize: "vertical", minHeight: 88 }}
           />
@@ -1154,6 +1145,11 @@ export function PatientDetailPage() {
                 <div style={{ color: "#475569", fontSize: 14 }}>
                   {feedback.pathology ?? "pathologie non precisee"} - {feedback.surgery_type ?? "chirurgie non precisee"}
                 </div>
+                {feedback.final_diagnosis ? (
+                  <div style={{ color: "#475569", fontSize: 14 }}>
+                    Validation medecin: {feedback.final_diagnosis}
+                  </div>
+                ) : null}
                 <div style={{ color: "#64748b", fontSize: 13 }}>
                   {feedback.has_critical === 1 ? "critique" : "non critique"} - {feedback.comment || "Sans commentaire"}
                 </div>
@@ -1161,6 +1157,64 @@ export function PatientDetailPage() {
             ))
           )}
         </div>
+      </section>
+
+      <section style={{ background: "#ffffff", borderRadius: 18, padding: 16, boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)", display: "grid", gap: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 800, color: "#0f172a" }}>Conduite a tenir (LLM a la demande)</div>
+          <button
+            type="button"
+            onClick={() => handleTerrainGuidance()}
+            style={darkButton}
+            disabled={!hasMedicalValidation || terrainGuidanceStatus === "loading"}
+          >
+            {terrainGuidanceStatus === "loading" ? "Generation..." : "Generer conduite a tenir"}
+          </button>
+        </div>
+        {!hasMedicalValidation ? (
+          <div style={{ color: "#b45309", fontSize: 13, fontWeight: 700 }}>
+            Validation medecin requise avant generation de la conduite a tenir.
+          </div>
+        ) : null}
+        {terrainGuidance ? (
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ color: "#334155", fontSize: 14 }}>
+              Source: {terrainGuidance.source} / {terrainGuidance.llm_status} - personnalisation: {terrainGuidance.personalization_level}
+            </div>
+            {terrainGuidance.warning ? (
+              <div style={{ color: "#b45309", fontSize: 13, fontWeight: 700 }}>{terrainGuidance.warning}</div>
+            ) : null}
+            <RiskExplainCard
+              title="Actions immediates"
+              level="priorite terrain"
+              items={terrainGuidance.immediate_actions}
+              emptyMessage="Aucune action immediate proposee."
+            />
+            <RiskExplainCard
+              title="Surveillance ciblee"
+              level="points de controle"
+              items={terrainGuidance.surveillance_points}
+              emptyMessage="Aucun point de surveillance specifique."
+            />
+            <RiskExplainCard
+              title="Criteres d'escalade"
+              level="securite"
+              items={terrainGuidance.escalation_triggers}
+              emptyMessage="Aucun critere d'escalade specifique."
+            />
+            <div style={{ borderRadius: 12, background: "#f8fafc", border: "1px solid #e2e8f0", padding: 12, display: "grid", gap: 8 }}>
+              <div style={{ fontWeight: 700, color: "#0f172a" }}>Resume de transmission retravaille</div>
+              <div style={{ color: "#334155", fontSize: 14 }}>{terrainGuidance.transmission_summary}</div>
+              <div style={{ color: "#64748b", fontSize: 13 }}>
+                Sources: {terrainGuidance.cited_sources.join(" ; ")}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ color: "#64748b", fontSize: 14 }}>
+            Lance la generation pour obtenir une conduite a tenir contextualisee apres validation medecin.
+          </div>
+        )}
       </section>
 
     </div>
@@ -1279,9 +1333,9 @@ function buildBlindValidationState(
     return {
       before,
       after: null,
-      verdict: null,
-      canReveal: false,
-      helperText: "Valide le questionnaire pour comparer l'orientation initiale puis l'analyse recontextualisee.",
+      verdict: buildSingleBlindValidationVerdict(before),
+      canReveal: scenario.trim().length > 0,
+      helperText: "Aucun questionnaire declenche pour ce cas. La validation en aveugle reste possible sur l'analyse initiale seule.",
     };
   }
 
@@ -1291,6 +1345,96 @@ function buildBlindValidationState(
     verdict: buildBlindValidationVerdict(before, after),
     canReveal: scenario.trim().length > 0,
     helperText: "Le scenario reel reste masque jusqu'a la revelation manuelle. Ce panneau sert a mesurer l'apport du questionnaire.",
+  };
+}
+
+function getPathologyLabel(value: PathologyOptionValue): string {
+  switch (value) {
+    case "stable":
+      return "Etat post-operatoire stable";
+    case "sepsis":
+      return "Sepsis / complication infectieuse";
+    case "hemorragie":
+      return "Hemorragie / hypovolemie";
+    case "embolie_pulmonaire":
+      return "Embolie pulmonaire";
+    case "respiratoire":
+      return "Complication respiratoire post-op";
+    case "cardiaque":
+      return "Complication cardiaque post-op";
+    case "douleur":
+      return "Douleur post-op non controlee";
+    case "autre":
+      return "Autre";
+    default:
+      return "";
+  }
+}
+
+function inferPathologyOption(value: string): PathologyOptionValue {
+  const normalized = normalizeClinicalText(value);
+  if (!normalized) {
+    return "autre";
+  }
+  if (normalized.includes("constantes normales") || normalized.includes("temoin") || normalized.includes("stable")) {
+    return "stable";
+  }
+  if (normalized.includes("embolie")) {
+    return "embolie_pulmonaire";
+  }
+  if (normalized.includes("sepsis") || normalized.includes("infect")) {
+    return "sepsis";
+  }
+  if (normalized.includes("hemorrag") || normalized.includes("hypovolem")) {
+    return "hemorragie";
+  }
+  if (normalized.includes("douleur")) {
+    return "douleur";
+  }
+  if (normalized.includes("cardiaq") || normalized.includes("bas debit")) {
+    return "cardiaque";
+  }
+  if (
+    normalized.includes("pneumopathie")
+    || normalized.includes(" ira ")
+    || normalized.includes("ira post-op")
+    || normalized.includes("respiratoire")
+  ) {
+    return "respiratoire";
+  }
+  return "autre";
+}
+
+function buildSingleBlindValidationVerdict(
+  before: {
+    label: string;
+    percent: number;
+    compatibility: "high" | "medium" | "low";
+    truthStatus: TruthStatus;
+  }
+): {
+  label: string;
+  detail: string;
+  tone: ValidationTone;
+} {
+  if (before.truthStatus === "match") {
+    return {
+      label: "Lecture initiale concordante",
+      detail: "Sans questionnaire, l'analyse initiale pointe deja vers la bonne famille clinique.",
+      tone: "positive",
+    };
+  }
+  if (before.truthStatus === "mismatch") {
+    return {
+      label: "Lecture initiale hors cible",
+      detail: "Sans questionnaire, l'analyse initiale ne rejoint pas la verite terrain.",
+      tone: "warning",
+    };
+  }
+  return {
+    label: "Lecture initiale seule",
+    detail: "La verite terrain peut etre revelee meme sans questionnaire, mais la correspondance automatique reste partielle.",
+    tone: "neutral",
   };
 }
 

@@ -16,6 +16,7 @@ from app.llm.prompt_templates import (
     build_prioritization_prompt,
     build_scenario_review_prompt,
 )
+from app.llm.validated_categories import build_validated_context
 
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
@@ -164,6 +165,10 @@ class ClinicalPackageResponse(BaseModel):
     source: Literal["ollama", "rule-based"]
     llm_status: Literal["ollama", "rule-based", "llm-unavailable", "disabled"] = "rule-based"
     patient_id: str
+    analysis_mode: Literal["pre_validation", "post_validation"] = "pre_validation"
+    validated_diagnosis: str | None = None
+    diagnosis_category: str | None = None
+    surgery_category: str | None = None
     summary_text: str
     explanatory_score: ExplanatoryScoreResponse
     analysis_state: AnalysisStateResponse
@@ -231,8 +236,11 @@ class TerrainGuidanceResponse(BaseModel):
     source: Literal["ollama", "rule-based"]
     llm_status: Literal["ollama", "rule-based", "llm-unavailable", "disabled"] = "rule-based"
     patient_id: str
+    analysis_mode: Literal["post_validation"] = "post_validation"
     diagnosis_decision: Literal["validated", "rejected"]
     diagnosis_final: str
+    diagnosis_category: str
+    surgery_category: str
     personalization_level: Literal["low", "medium", "high"]
     warning: str = ""
     immediate_actions: list[str]
@@ -455,6 +463,24 @@ def _clinical_context_hash(prompt_context: dict[str, Any]) -> str:
     return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
 
 
+def _validation_context_hash(validated_context: dict[str, Any] | None) -> str:
+    serialized = json.dumps(validated_context or {}, sort_keys=True, ensure_ascii=True)
+    return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
+
+
+def _latest_validation_feedback(services: Any, patient_id: str) -> dict[str, Any] | None:
+    recent_feedback = services.postgres.list_ml_feedback(patient_id=patient_id, limit=20)
+    return next(
+        (
+            row
+            for row in recent_feedback
+            if row.get("diagnosis_decision") in {"validated", "rejected"}
+            and str(row.get("final_diagnosis") or "").strip()
+        ),
+        None,
+    )
+
+
 def _analysis_fingerprint(
     *,
     surgery_type: str,
@@ -463,6 +489,7 @@ def _analysis_fingerprint(
     alerts: list[dict[str, Any]],
     history_points: list[dict[str, Any]],
     prompt_context: dict[str, Any],
+    validated_context: dict[str, Any] | None,
 ) -> str:
     hr = float(last_vitals.get("hr", 0) or 0)
     spo2 = float(last_vitals.get("spo2", 0) or 0)
@@ -500,6 +527,7 @@ def _analysis_fingerprint(
             "signature": _alert_signature(alerts),
         },
         "context_hash": _clinical_context_hash(prompt_context),
+        "validation_hash": _validation_context_hash(validated_context),
     }
     serialized = json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=True)
     return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
@@ -608,11 +636,17 @@ def _summary_from_clinical_package(
     summary = str(package_payload.get("handoff_summary") or "").strip()
     if summary:
         return summary
+    validated_diagnosis = str(package_payload.get("validated_diagnosis") or "").strip()
     leading_hypothesis = ""
     ranking = package_payload.get("hypothesis_ranking") or []
     if isinstance(ranking, list) and ranking:
         leading_hypothesis = str(ranking[0].get("label") or "").strip()
     synthesis = str(package_payload.get("structured_synthesis") or "").strip()
+    if validated_diagnosis:
+        return (
+            f"{patient['id']} J+{last_vitals.get('postop_day', patient['postop_day'])} apres {surgery_type}. "
+            f"Diagnostic valide: {validated_diagnosis}. {synthesis}"
+        ).strip()
     if leading_hypothesis:
         return (
             f"{patient['id']} J+{last_vitals.get('postop_day', patient['postop_day'])} apres {surgery_type}. "
@@ -730,6 +764,8 @@ async def resolve_patient_analysis(
     raw_context = payload.as_prompt_dict()
     prompt_context = _prompt_context_from_payload(services, payload)
     questionnaire_state = _normalize_questionnaire_state(raw_context.get("questionnaire"))
+    validation_feedback = _latest_validation_feedback(services, patient_id)
+    validated_context = build_validated_context(validation_feedback, surgery_type=surgery_type)
     fingerprint = _analysis_fingerprint(
         surgery_type=surgery_type,
         postop_day=int(last_vitals.get("postop_day", patient["postop_day"])),
@@ -737,6 +773,7 @@ async def resolve_patient_analysis(
         alerts=alerts,
         history_points=history_points,
         prompt_context=prompt_context,
+        validated_context=validated_context,
     )
     cache_row = services.postgres.get_analysis_cache(patient_id, ANALYSIS_CACHE_TYPE) if persist_cache else None
 
@@ -787,6 +824,7 @@ async def resolve_patient_analysis(
         history_points,
         schema=CLINICAL_PACKAGE_SCHEMA,
         clinical_context=prompt_context,
+        validated_context=validated_context,
         knowledge_excerpt=services.knowledge_base.get_excerpt("clinical_package"),
     )
     structured = await services.llm_client.generate_structured(
@@ -812,8 +850,26 @@ async def resolve_patient_analysis(
             history_points,
             surgery_type,
             questionnaire=prompt_context.get("questionnaire"),
+            validated_context=validated_context,
         )
+    package_payload = _apply_stability_guardrail(
+        package_payload,
+        patient=patient,
+        last_vitals=last_vitals,
+        alerts=alerts,
+        history_points=history_points,
+        surgery_type=surgery_type,
+        validated_context=validated_context,
+    )
 
+    package_payload.update(
+        {
+            "analysis_mode": "post_validation" if validated_context else "pre_validation",
+            "validated_diagnosis": validated_context.get("validated_diagnosis") if validated_context else None,
+            "diagnosis_category": validated_context.get("diagnosis_category") if validated_context else None,
+            "surgery_category": validated_context.get("surgery_category") if validated_context else None,
+        }
+    )
     summary_text = _summary_from_clinical_package(
         package_payload,
         patient=patient,
@@ -1045,20 +1101,17 @@ async def terrain_guidance(
         request,
         restrict_to_scenario=False,
     )
-    recent_feedback = services.postgres.list_ml_feedback(patient_id=patient_id, limit=20)
-    diagnosis_feedback = next(
-        (
-            row
-            for row in recent_feedback
-            if row.get("diagnosis_decision") in {"validated", "rejected"}
-            and str(row.get("final_diagnosis") or "").strip()
-        ),
-        None,
-    )
+    diagnosis_feedback = _latest_validation_feedback(services, patient_id)
     if not diagnosis_feedback:
         raise HTTPException(
             status_code=412,
             detail="Validation medecin de la pathologie requise avant la conduite a tenir.",
+        )
+    validated_context = build_validated_context(diagnosis_feedback, surgery_type=surgery_type)
+    if not validated_context:
+        raise HTTPException(
+            status_code=412,
+            detail="Diagnostic final valide requis avant la conduite a tenir.",
         )
 
     patient_factors = [item.strip() for item in payload.patient_factors if item.strip()]
@@ -1080,10 +1133,9 @@ async def terrain_guidance(
     current_rr = int(round(float(last_vitals.get("rr", 0) or 0)))
     current_temp = round(float(last_vitals.get("temp", 0) or 0), 1)
     alert_titles = [str(alert.get("title") or "") for alert in alerts[:3] if str(alert.get("title") or "").strip()]
-    diagnosis_final = str(diagnosis_feedback.get("final_diagnosis") or "").strip()
-    diagnosis_decision = str(diagnosis_feedback.get("diagnosis_decision") or "validated").strip().lower()
-    if diagnosis_decision not in {"validated", "rejected"}:
-        diagnosis_decision = "validated"
+    diagnosis_final = str(validated_context.get("validated_diagnosis") or "").strip()
+    diagnosis_decision = str(validated_context.get("diagnosis_decision") or "validated").strip().lower()
+    category_focus = validated_context.get("focus") or {}
 
     kb_guidance = services.knowledge_base.get_excerpt("terrain_guidance") or "source non disponible"
     kb_sources = services.knowledge_base.get_excerpt("terrain_sources") or "source non disponible"
@@ -1091,15 +1143,20 @@ async def terrain_guidance(
     prompt = (
         "Tu dois produire une conduite a tenir post-operatoire contextualisee et prudente.\n"
         "N'utilise que les donnees fournies. Ne pose pas de diagnostic certain.\n"
+        "Le diagnostic medical valide est une verite de contexte: adapte la surveillance et l'escalade sans le rediscuter.\n"
         "Retourne uniquement un JSON conforme au schema.\n"
         f"Patient: {patient_id}, chirurgie: {surgery_type}, scenario observe: {scenario}.\n"
         f"Decision medecin: {diagnosis_decision}, diagnostic final: {diagnosis_final}.\n"
+        f"Categorie diagnostique validee: {validated_context.get('diagnosis_category_label')}.\n"
+        f"Categorie de chirurgie: {validated_context.get('surgery_category_label')}.\n"
         f"Constantes recentes: SpO2 {current_spo2}%, TAM {current_map} mmHg, FR {current_rr}/min, T {current_temp}C.\n"
         f"Alertes recentes: {', '.join(alert_titles) if alert_titles else 'aucune'}\n"
         f"Terrain patient: {', '.join(patient_factors) if patient_factors else 'aucun'}\n"
         f"Contexte peri-op: {', '.join(periop_context) if periop_context else 'aucun'}\n"
         f"Commentaire libre: {free_text or 'aucun'}\n"
         f"Personnalisation attendue: {personalization_level}.\n"
+        f"Axes de surveillance prioritaires: {', '.join(category_focus.get('surveillance_points') or ['non precises'])}\n"
+        f"Criteres d'escalade cibles: {', '.join(category_focus.get('escalation_triggers') or ['non precises'])}\n"
         f"KB guidance:\n{kb_guidance}\n"
         f"KB sources:\n{kb_sources}\n"
     )
@@ -1122,11 +1179,13 @@ async def terrain_guidance(
                 "Reevaluer constants, signes fonctionnels et tolerance clinique dans l'heure.",
                 "Documenter clairement la decision medicale et le diagnostic final dans la transmission.",
             ],
-            "surveillance_points": [
+            "surveillance_points": list(category_focus.get("surveillance_points") or [])
+            + [
                 "Surveiller SpO2, FR, TAM, FC, temperature et symptomes associes.",
                 "Rechercher toute derive par rapport aux mesures precedentes et aux alertes recentes.",
             ],
-            "escalation_triggers": [
+            "escalation_triggers": list(category_focus.get("escalation_triggers") or [])
+            + [
                 "Escalader si dyspnee brutale, desaturation, hypotension, malaise, douleur thoracique ou confusion.",
                 "Escalader si aggravation clinique malgre surveillance rapprochee.",
             ],
@@ -1147,8 +1206,11 @@ async def terrain_guidance(
         "source": source,
         "llm_status": llm_status,
         "patient_id": patient_id,
+        "analysis_mode": "post_validation",
         "diagnosis_decision": diagnosis_decision,
         "diagnosis_final": diagnosis_final,
+        "diagnosis_category": validated_context.get("diagnosis_category"),
+        "surgery_category": validated_context.get("surgery_category"),
         "personalization_level": personalization_level,
         "warning": warning,
         "immediate_actions": _clean_lines(
@@ -1549,6 +1611,105 @@ def _questionnaire_takeaway(questionnaire: dict[str, Any] | None) -> str:
     return f"Le questionnaire differentiel renforce surtout: {strongest['reason']}"
 
 
+def _stable_hypothesis_row(
+    *,
+    label: str = "Etat post-operatoire stable sans complication active evidente",
+) -> dict[str, Any]:
+    return {
+        "label": label,
+        "compatibility": "high",
+        "compatibility_percent": 100,
+        "arguments_for": [
+            "Constantes actuelles rassurantes et proches du baseline.",
+            "Pas de signal combine fort en faveur d'une complication active.",
+        ],
+        "arguments_against": [
+            "Poursuivre la surveillance si de nouveaux symptomes ou alertes apparaissent.",
+        ],
+    }
+
+
+def _is_objectively_stable(
+    last_vitals: dict[str, Any],
+    alerts: list[dict[str, Any]],
+    history_points: list[dict[str, Any]],
+) -> bool:
+    hr = float(last_vitals.get("hr", 0) or 0)
+    spo2 = float(last_vitals.get("spo2", 0) or 0)
+    rr = float(last_vitals.get("rr", 0) or 0)
+    temp = float(last_vitals.get("temp", 0) or 0)
+    map_value = float(last_vitals.get("map", 0) or 0)
+    shock_index = float(last_vitals.get("shock_index", 0) or 0)
+
+    if any(str(alert.get("level") or "").upper() in {"WARNING", "CRITICAL"} for alert in alerts):
+        return False
+
+    hr_delta = abs(_history_delta(history_points, "hr", hr))
+    spo2_delta = abs(_history_delta(history_points, "spo2", spo2))
+    map_delta = abs(_history_delta(history_points, "map", map_value))
+    rr_delta = abs(_history_delta(history_points, "rr", rr))
+    temp_delta = abs(_history_delta(history_points, "temp", temp))
+
+    return (
+        60 <= hr <= 100
+        and spo2 >= 95
+        and rr < 22
+        and 36.0 < temp < 38.0
+        and map_value >= 75
+        and shock_index < 0.85
+        and hr_delta < 8
+        and spo2_delta < 2
+        and map_delta < 5
+        and rr_delta < 4
+        and temp_delta < 0.3
+    )
+
+
+def _stable_package_payload(
+    *,
+    patient: dict[str, Any],
+    last_vitals: dict[str, Any],
+    surgery_type: str,
+) -> dict[str, Any]:
+    return {
+        "patient_id": patient["id"],
+        "structured_synthesis": (
+            f"{patient['id']} apres {surgery_type}: constantes globalement rassurantes, sans argument objectif fort "
+            "pour une complication active a cet instant."
+        ),
+        "alert_explanations": ["Pas d'alerte clinique prioritaire active a expliquer actuellement."],
+        "hypothesis_ranking": [_stable_hypothesis_row()],
+        "trajectory_status": "stable",
+        "trajectory_explanation": "Trajectoire clinique stable sans derive significative depuis J0.",
+        "recheck_recommendations": [
+            "Poursuivre la surveillance reguliere des constantes et des symptomes.",
+            "Reevaluer en priorite si une nouvelle derive ou un nouveau symptome apparait.",
+        ],
+        "handoff_summary": (
+            f"{patient['id']} J{last_vitals.get('postop_day', patient['postop_day'])} apres {surgery_type}, "
+            "etat actuellement rassurant sans complication active evidente."
+        ),
+        "scenario_consistency": "Les donnees actuelles sont coherentes avec un etat post-operatoire stable.",
+    }
+
+
+def _apply_stability_guardrail(
+    package_payload: dict[str, Any],
+    *,
+    patient: dict[str, Any],
+    last_vitals: dict[str, Any],
+    alerts: list[dict[str, Any]],
+    history_points: list[dict[str, Any]],
+    surgery_type: str,
+    validated_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if validated_context is not None:
+        return package_payload
+    if not _is_objectively_stable(last_vitals, alerts, history_points):
+        return package_payload
+    return _stable_package_payload(patient=patient, last_vitals=last_vitals, surgery_type=surgery_type)
+
+
 def _objective_hypothesis_rows(
     last_vitals: dict,
     alerts: list[dict],
@@ -1556,6 +1717,9 @@ def _objective_hypothesis_rows(
     *,
     questionnaire: dict[str, Any] | None = None,
 ) -> list[dict]:
+    if _is_objectively_stable(last_vitals, alerts, history_points):
+        return [_stable_hypothesis_row()]
+
     hr = float(last_vitals.get("hr", 0))
     spo2 = float(last_vitals.get("spo2", 0))
     sbp = float(last_vitals.get("sbp", 0))
@@ -2126,6 +2290,91 @@ def _fallback_review(
     }
 
 
+def _compatibility_percent(level: str) -> int:
+    return {
+        "high": 78,
+        "medium": 54,
+        "low": 28,
+    }.get(level, 40)
+
+
+def _compatibility_phrase(level: str) -> str:
+    return {
+        "high": "globalement coherentes",
+        "medium": "partiellement coherentes",
+        "low": "peu coherentes",
+    }.get(level, "incompletement coherentes")
+
+
+def _merge_unique_lines(*groups: list[str], limit: int = 3) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            line = str(item).strip()
+            key = line.lower()
+            if not line or key in seen:
+                continue
+            merged.append(line)
+            seen.add(key)
+            if len(merged) >= limit:
+                return merged
+    return merged
+
+
+def _validated_hypothesis_rows(
+    validated_context: dict[str, Any],
+    objective_rows: list[dict[str, Any]],
+    alerts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    diagnosis_label = str(validated_context.get("validated_diagnosis") or "Diagnostic valide").strip()
+    heuristic_label = str(validated_context.get("heuristic_label") or "").strip()
+    diagnosis_category = str(validated_context.get("diagnosis_category") or "").strip()
+    focus = validated_context.get("focus") or {}
+    matched_row = next(
+        (row for row in objective_rows if str(row.get("label") or "").strip() == heuristic_label),
+        None,
+    )
+
+    if matched_row:
+        lead_row = {
+            "label": diagnosis_label,
+            "compatibility": matched_row.get("compatibility", "medium"),
+            "compatibility_percent": int(
+                matched_row.get("compatibility_percent") or _compatibility_percent(str(matched_row.get("compatibility")))
+            ),
+            "arguments_for": list(matched_row.get("arguments_for") or [])[:2],
+            "arguments_against": list(matched_row.get("arguments_against") or [])[:2],
+        }
+        watch_rows = [row for row in objective_rows if row is not matched_row][:2]
+        return [lead_row, *watch_rows]
+
+    no_critical_alert = not any(str(alert.get("level") or "").upper() == "CRITICAL" for alert in alerts)
+    if diagnosis_category == "stable":
+        compatibility = "high" if no_critical_alert else "low"
+        arguments_for = [
+            "Pas de pattern automatique fortement dominant en faveur d'une complication majeure.",
+        ]
+        arguments_against = [
+            "Toute derive respiratoire, hemodynamique ou thermique remettrait en cause cette stabilite.",
+        ]
+    else:
+        compatibility = "medium"
+        arguments_for = list(focus.get("expected_signals") or ["Diagnostic valide a confronter aux constantes actuelles."])[:2]
+        arguments_against = list(
+            focus.get("contradicting_signals") or ["Verifier toute discordance entre la trajectoire et le diagnostic valide."]
+        )[:2]
+
+    lead_row = {
+        "label": diagnosis_label,
+        "compatibility": compatibility,
+        "compatibility_percent": _compatibility_percent(compatibility),
+        "arguments_for": arguments_for,
+        "arguments_against": arguments_against,
+    }
+    return [lead_row, *objective_rows[:2]]
+
+
 def _fallback_clinical_package(
     patient: dict,
     last_vitals: dict,
@@ -2134,8 +2383,9 @@ def _fallback_clinical_package(
     surgery_type: str,
     *,
     questionnaire: dict[str, Any] | None = None,
+    validated_context: dict[str, Any] | None = None,
 ) -> dict:
-    hypothesis_rows = _objective_hypothesis_rows(
+    objective_rows = _objective_hypothesis_rows(
         last_vitals,
         alerts,
         history_points,
@@ -2182,6 +2432,52 @@ def _fallback_clinical_package(
     if not recheck_recommendations:
         recheck_recommendations.append("Poursuivre la surveillance reguliere des constantes.")
 
+    if validated_context:
+        hypothesis_rows = _validated_hypothesis_rows(validated_context, objective_rows, alerts)
+        leading_hypothesis = hypothesis_rows[0]["label"]
+        lead_level = str(hypothesis_rows[0].get("compatibility") or "medium")
+        coherence_phrase = _compatibility_phrase(lead_level)
+        focus = validated_context.get("focus") or {}
+        diagnosis_category_label = str(
+            validated_context.get("diagnosis_category_label")
+            or validated_context.get("diagnosis_category")
+            or "autre"
+        )
+        recheck_recommendations = _merge_unique_lines(
+            list(focus.get("surveillance_points") or []),
+            recheck_recommendations,
+            limit=3,
+        )
+        alert_explanations = _merge_unique_lines(
+            [f"Diagnostic valide: {leading_hypothesis}. Les constantes actuelles sont {coherence_phrase} avec cette categorie."],
+            alert_explanations,
+            limit=3,
+        )
+        questionnaire_suffix = f" {questionnaire_takeaway}" if questionnaire_takeaway else ""
+        return {
+            "patient_id": patient["id"],
+            "structured_synthesis": (
+                f"Diagnostic medical valide: {leading_hypothesis} ({diagnosis_category_label}). "
+                f"Les constantes actuelles sont {coherence_phrase} avec ce diagnostic, avec FC {int(hr)} bpm, "
+                f"SpO2 {int(spo2)}%, TAM {map_value}, FR {int(rr)}/min, T C {temp:.1f}.{questionnaire_suffix}"
+            ).strip(),
+            "alert_explanations": alert_explanations,
+            "hypothesis_ranking": hypothesis_rows[:3],
+            "trajectory_status": trajectory_status,
+            "trajectory_explanation": trajectory_explanation,
+            "recheck_recommendations": recheck_recommendations[:3],
+            "handoff_summary": (
+                f"{patient['id']} J{last_vitals.get('postop_day', patient['postop_day'])} apres {surgery_type}. "
+                f"Diagnostic medical valide: {leading_hypothesis}. Coherence actuelle {coherence_phrase}; {trajectory_explanation.lower()}"
+                f"{' ' + questionnaire_takeaway if questionnaire_takeaway else ''}"
+            ),
+            "scenario_consistency": (
+                f"Analyse post-validation: constantes {coherence_phrase} avec le diagnostic valide {leading_hypothesis}."
+                f"{' ' + questionnaire_takeaway if questionnaire_takeaway else ''}"
+            ),
+        }
+
+    hypothesis_rows = objective_rows
     leading_hypothesis = hypothesis_rows[0]["label"]
 
     return {

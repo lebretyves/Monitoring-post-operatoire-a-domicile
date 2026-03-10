@@ -233,6 +233,151 @@ def test_patients_and_trends_endpoints() -> None:
             os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
 
 
+def test_push_routes_are_exposed() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                push_config_response = client.get("/api/push/config")
+                assert push_config_response.status_code == 200
+                assert push_config_response.json() == {"enabled": False, "public_key": ""}
+
+                openapi_response = client.get("/openapi.json")
+                assert openapi_response.status_code == 200
+                assert "/api/push/config" in openapi_response.json()["paths"]
+                assert "/api/push/subscriptions" in openapi_response.json()["paths"]
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_post_validation_analysis_uses_categories() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                reading = {
+                    "ts": "2026-03-04T10:00:00Z",
+                    "patient_id": "PAT-001",
+                    "profile": "baseline_normale",
+                    "scenario": "recovery_copy_patient1",
+                    "scenario_label": "Constantes Normales",
+                    "hr": 82,
+                    "spo2": 97,
+                    "sbp": 124,
+                    "dbp": 76,
+                    "map": 92,
+                    "rr": 16,
+                    "temp": 36.9,
+                    "room": "A101",
+                    "battery": 99,
+                    "postop_day": 1,
+                    "surgery_type": "cholecystectomie laparoscopique",
+                    "shock_index": 0.66,
+                }
+                services.state.push(reading)
+                services.last_vitals["PAT-001"] = reading
+                services.influx.write_vital(reading)
+
+                feedback_response = client.post(
+                    "/api/ml/PAT-001/feedback",
+                    json={
+                        "decision": "validate",
+                        "target": "non_critical",
+                        "pathology": "Constantes Normales",
+                        "diagnosis_decision": "validated",
+                        "final_diagnosis": "Constantes post-operatoires stables",
+                        "comment": "Validation medecin de la stabilite.",
+                    },
+                )
+                assert feedback_response.status_code == 200
+                stored_feedback = feedback_response.json()["feedback"]
+                assert stored_feedback["final_diagnosis_class"] == "stable"
+                assert stored_feedback["surgery_class"] == "abdominale"
+
+                terrain_guidance_response = client.post(
+                    "/api/llm/PAT-001/terrain-guidance",
+                    json={
+                        "patient_factors": [],
+                        "perioperative_context": [],
+                        "free_text": "",
+                    },
+                )
+                assert terrain_guidance_response.status_code == 200
+                terrain_payload = terrain_guidance_response.json()
+                assert terrain_payload["analysis_mode"] == "post_validation"
+                assert terrain_payload["diagnosis_category"] == "stable"
+                assert terrain_payload["surgery_category"] == "abdominale"
+
+                clinical_package_response = client.get("/api/llm/PAT-001/clinical-package")
+                assert clinical_package_response.status_code == 200
+                package_payload = clinical_package_response.json()
+                assert package_payload["analysis_mode"] == "post_validation"
+                assert package_payload["validated_diagnosis"] == "Constantes post-operatoires stables"
+                assert package_payload["diagnosis_category"] == "stable"
+                assert package_payload["surgery_category"] == "abdominale"
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_stable_patient_without_questionnaire_keeps_stable_analysis() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                reading = {
+                    "ts": "2026-03-04T10:00:00Z",
+                    "patient_id": "PAT-001",
+                    "profile": "baseline_normale",
+                    "scenario": "recovery_copy_patient1",
+                    "scenario_label": "Constantes Normales",
+                    "hr": 78,
+                    "spo2": 98,
+                    "sbp": 124,
+                    "dbp": 77,
+                    "map": 93,
+                    "rr": 16,
+                    "temp": 36.8,
+                    "room": "A101",
+                    "battery": 99,
+                    "postop_day": 1,
+                    "surgery_type": "cholecystectomie laparoscopique",
+                    "shock_index": 0.63,
+                }
+                services.state.push(reading)
+                services.last_vitals["PAT-001"] = reading
+                services.influx.write_vital(reading)
+
+                questionnaire_response = client.get("/api/llm/PAT-001/questionnaire")
+                assert questionnaire_response.status_code == 200
+                assert questionnaire_response.json()["modules"] == []
+
+                clinical_package_response = client.get("/api/llm/PAT-001/clinical-package")
+                assert clinical_package_response.status_code == 200
+                payload = clinical_package_response.json()
+                assert payload["trajectory_status"] == "stable"
+                assert payload["hypothesis_ranking"][0]["label"] == "Etat post-operatoire stable sans complication active evidente"
+                assert "stable" in payload["scenario_consistency"].lower()
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
 def test_health_endpoints() -> None:
     """Test both lightweight and deep LLM healthcheck endpoints."""
     app = create_app(test_mode=True)
@@ -371,6 +516,8 @@ def test_export_pdf_contains_clinical_sections() -> None:
                 assert validated_response.status_code == 200
                 validated_payload = validated_response.content.decode("latin-1", errors="ignore")
                 assert "VALIDATION MEDICALE" in validated_payload
+                assert "Commentaire medecin" in validated_payload
+                assert "Validation et signature medecin." in validated_payload
     finally:
         if previous_runtime_dir is None:
             os.environ.pop("ML_RUNTIME_DIR", None)

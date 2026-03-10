@@ -41,6 +41,10 @@ class Settings:
     ollama_model: str
     ollama_timeout_seconds: int
     kb_root: Path
+    enable_webpush: bool
+    vapid_public_key: str
+    vapid_private_key: str
+    vapid_claims_sub: str
     test_mode: bool
 
     @property
@@ -104,5 +108,9 @@ def load_settings(test_mode: bool | None = None) -> Settings:
         ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct"),
         ollama_timeout_seconds=int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "90")),
         kb_root=_resolve_path("KB_ROOT", "kb", must_exist=False),
+        enable_webpush=_as_bool(os.getenv("ENABLE_WEBPUSH"), False),
+        vapid_public_key=os.getenv("VAPID_PUBLIC_KEY", ""),
+        vapid_private_key=os.getenv("VAPID_PRIVATE_KEY", ""),
+        vapid_claims_sub=os.getenv("VAPID_CLAIMS_SUB", "mailto:ops@localhost"),
         test_mode=resolved_test_mode,
     )

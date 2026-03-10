@@ -103,6 +103,51 @@ export function getNotifications(
   return readJson<NotificationRecord[]>(`/api/notifications${suffix}`);
 }
 
+export function getPushConfig(): Promise<{ enabled: boolean; public_key: string }> {
+  return readJson<{ enabled: boolean; public_key: string }>("/api/push/config");
+}
+
+export function registerPushSubscription(payload: {
+  user_id: string;
+  device_id: string;
+  user_agent?: string;
+  subscription: {
+    endpoint: string;
+    keys: {
+      p256dh: string;
+      auth: string;
+    };
+  };
+}): Promise<{ status: string }> {
+  return fetch(`${API_BASE}/api/push/subscriptions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} on push subscribe`);
+    }
+    return response.json() as Promise<{ status: string }>;
+  });
+}
+
+export function unregisterPushSubscription(endpoint: string): Promise<{ status: string }> {
+  return fetch(`${API_BASE}/api/push/subscriptions`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ endpoint })
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} on push unsubscribe`);
+    }
+    return response.json() as Promise<{ status: string }>;
+  });
+}
+
 export function markNotificationRead(notificationId: number): Promise<NotificationRecord> {
   return fetch(`${API_BASE}/api/notifications/${notificationId}/read?user=demo`, { method: "POST" }).then(
     async (response) => {

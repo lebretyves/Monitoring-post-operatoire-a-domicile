@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 
-import { getNotifications, markNotificationRead } from "./api/http";
+import { getNotifications, getPushConfig, markNotificationRead, registerPushSubscription } from "./api/http";
 import { connectLiveSocket } from "./api/ws";
 import { NotificationCenter } from "./components/NotificationCenter";
 import { PatientDetailPage } from "./pages/PatientDetail";
@@ -101,6 +101,10 @@ function AppShell() {
   );
   const [open, setOpen] = useState(false);
   const unreadCount = notifications.filter((item) => item.status === "UNREAD").length;
+
+  useEffect(() => {
+    registerWebPushForDemoUser().catch(console.error);
+  }, []);
 
   useEffect(() => {
     getNotifications().then((rows) => {
@@ -227,6 +231,9 @@ function AppShell() {
                   }
                   const permission = await window.Notification.requestPermission();
                   setBrowserPermission(permission);
+                  if (permission === "granted") {
+                    await registerWebPushForDemoUser().catch(console.error);
+                  }
                 }}
               />
             </div>
@@ -241,6 +248,65 @@ function AppShell() {
       </div>
     </BrowserRouter>
   );
+}
+
+async function registerWebPushForDemoUser(): Promise<void> {
+  if (typeof window === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+    return;
+  }
+  if (!window.isSecureContext) {
+    return;
+  }
+  const pushConfig = await getPushConfig().catch(() => null);
+  if (!pushConfig?.enabled || !pushConfig.public_key) {
+    return;
+  }
+  const registration = await navigator.serviceWorker.register("/sw.js");
+  const permission = await window.Notification.requestPermission();
+  if (permission !== "granted") {
+    return;
+  }
+  const applicationServerKey = urlBase64ToUint8Array(pushConfig.public_key) as BufferSource;
+  const existingSubscription = await registration.pushManager.getSubscription();
+  const subscription =
+    existingSubscription ||
+    (await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey,
+    }));
+  const keys = subscription.toJSON().keys;
+  if (!subscription.endpoint || !keys?.p256dh || !keys.auth) {
+    return;
+  }
+  const storageKey = "postop-monitoring-device-id";
+  let deviceId = window.localStorage.getItem(storageKey);
+  if (!deviceId) {
+    deviceId = `web-${Math.random().toString(36).slice(2, 10)}`;
+    window.localStorage.setItem(storageKey, deviceId);
+  }
+  await registerPushSubscription({
+    user_id: "demo",
+    device_id: deviceId,
+    user_agent: window.navigator.userAgent,
+    subscription: {
+      endpoint: subscription.endpoint,
+      keys: {
+        p256dh: keys.p256dh,
+        auth: keys.auth,
+      },
+    },
+  });
+}
+
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
 }
 
 function readBrowserPermission(): NotificationPermission | "unsupported" {

@@ -38,6 +38,8 @@ Regles:
 - Distingue donnees objectives et contexte declare.
 - Les alertes simples orientent, les alertes combinees et tendances sont plus specifiques.
 - Ne pose jamais de diagnostic certain.
+- Si un diagnostic medical valide est fourni, ne le rediscute pas: evalue sa coherence clinique actuelle.
+- Si les donnees sont rassurantes et qu'aucun signal fort n'oriente vers une complication, tu peux conclure a une stabilite clinique sans complication active evidente.
 - Tu ne connais pas le scenario simule interne.
 - Reponse courte, concrete, et strictement structuree.
 - Reponds uniquement avec un objet JSON conforme.
@@ -237,6 +239,35 @@ def _format_clinical_context(clinical_context: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
+def _format_validated_context(validated_context: dict[str, Any] | None) -> str:
+    if not validated_context:
+        return ""
+
+    focus = validated_context.get("focus") or {}
+    expected = focus.get("expected_signals") or []
+    contradictions = focus.get("contradicting_signals") or []
+    surveillance = focus.get("surveillance_points") or []
+    escalation = focus.get("escalation_triggers") or []
+
+    lines = [
+        "Validation medicale disponible:",
+        f"- Mode d'analyse: {validated_context.get('analysis_mode', 'post_validation')}",
+        f"- Decision medecin: {validated_context.get('diagnosis_decision', 'validated')}",
+        f"- Diagnostic final valide: {validated_context.get('validated_diagnosis', 'non precise')}",
+        f"- Categorie diagnostique validee: {validated_context.get('diagnosis_category_label', validated_context.get('diagnosis_category', 'autre'))}",
+        f"- Categorie de chirurgie: {validated_context.get('surgery_category_label', validated_context.get('surgery_category', 'autre'))}",
+    ]
+    if expected:
+        lines.append(f"- Signaux attendus a confronter: {', '.join(expected[:4])}")
+    if contradictions:
+        lines.append(f"- Signaux de discordance a signaler: {', '.join(contradictions[:4])}")
+    if surveillance:
+        lines.append(f"- Axes de surveillance prioritaires: {', '.join(surveillance[:4])}")
+    if escalation:
+        lines.append(f"- Criteres d'escalade a garder: {', '.join(escalation[:4])}")
+    return "\n".join(lines)
+
+
 def _format_questionnaire_hints(questionnaire: dict[str, Any]) -> list[str]:
     hints = questionnaire.get("differential_hints") or []
     if not isinstance(hints, list) or not hints:
@@ -367,8 +398,16 @@ def build_clinical_package_prompt(
     history_points: list[dict[str, Any]],
     schema: dict[str, Any],
     clinical_context: dict[str, Any] | None = None,
+    validated_context: dict[str, Any] | None = None,
     knowledge_excerpt: str | None = None,
 ) -> str:
+    post_validation_instructions = ""
+    if validated_context:
+        post_validation_instructions = (
+            "- Mode post-validation: hypothesis_ranking doit commencer par le diagnostic valide et qualifier sa coherence actuelle.\n"
+            "- Les autres lignes servent seulement a signaler au maximum deux risques ou tensions a surveiller a court terme.\n"
+            "- structured_synthesis et handoff_summary doivent partir du diagnostic valide, sans refaire un diagnostic differentiel libre.\n"
+        )
     return (
         "Tache unique: produire un pack d'analyse clinique structure et compact.\n"
         f"Redige uniquement en francais dans un objet JSON avec les cles: {_required_keys(schema)}.\n"
@@ -381,6 +420,8 @@ def build_clinical_package_prompt(
         "- recheck_recommendations: 3 items max.\n"
         "- handoff_summary: 3 phrases max.\n"
         "- scenario_consistency: 1 phrase sur la coherence clinique observee, sans mentionner de scenario cache.\n"
+        f"{post_validation_instructions}"
+        "- Si les constantes et la trajectoire sont rassurantes, hypothesis_ranking peut commencer par un etat stable sans complication active evidente.\n"
         f"Identifiant pseudonymise: {patient['id']}\n"
         f"Chirurgie: {last_vitals.get('surgery_type', patient['surgery_type'])}\n"
         f"Jour post-op: {last_vitals.get('postop_day', patient['postop_day'])}\n"
@@ -389,6 +430,7 @@ def build_clinical_package_prompt(
         f"Alertes recentes:\n{_format_alerts(alerts)}\n"
         f"{_course_summary(history_points)}\n"
         f"{_format_change_window(history_points)}\n"
+        f"{_format_validated_context(validated_context)}\n"
         f"{_format_clinical_context(clinical_context)}\n"
         f"{_format_knowledge_excerpt(knowledge_excerpt)}"
         "Retourne uniquement un objet JSON conforme au schema fourni."

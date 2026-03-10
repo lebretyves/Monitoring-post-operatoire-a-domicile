@@ -93,6 +93,10 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-90}
       KB_ROOT: /app/kb
+      ENABLE_WEBPUSH: ${ENABLE_WEBPUSH:-false}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_CLAIMS_SUB: ${VAPID_CLAIMS_SUB:-mailto:ops@localhost}
     volumes:
       - ./config:/app/config:ro
       - ./kb:/app/kb:ro

@@ -220,6 +220,7 @@ async def _build_terrain_guidance_for_report(
             "personalization_level": "low",
             "diagnosis_decision": "pending",
             "diagnosis_final": "",
+            "diagnosis_comment": "",
             "immediate_actions": [],
             "surveillance_points": [],
             "escalation_triggers": [],
@@ -229,6 +230,7 @@ async def _build_terrain_guidance_for_report(
 
     diagnosis_decision = str(diagnosis_feedback.get("diagnosis_decision") or "validated")
     diagnosis_final = str(diagnosis_feedback.get("final_diagnosis") or "").strip()
+    diagnosis_comment = str(diagnosis_feedback.get("comment") or "").strip()
     context_count = len(patient_history)
     personalization_level = "low" if context_count == 0 else ("medium" if context_count <= 3 else "high")
     warning = "" if context_count > 0 else "Aucun antecedent renseigne: conduite plus generaliste et moins precise."
@@ -240,11 +242,13 @@ async def _build_terrain_guidance_for_report(
     alert_titles = [str(alert.get("title") or "") for alert in alerts[:3] if str(alert.get("title") or "").strip()]
     kb_guidance = services.knowledge_base.get_excerpt("terrain_guidance") or "source non disponible"
     kb_sources = services.knowledge_base.get_excerpt("terrain_sources") or "source non disponible"
+    comment_line = f"Commentaire medecin: {diagnosis_comment}.\n" if diagnosis_comment else ""
 
     prompt = (
         "Produis une conduite a tenir post-operatoire prudente, en JSON strict.\n"
         "N'utilise que les donnees valides ci-dessous.\n"
         f"Decision medecin: {diagnosis_decision}; diagnostic final: {diagnosis_final}.\n"
+        f"{comment_line}"
         f"Patient {patient_id}, chirurgie: {surgery_type}, scenario: {scenario_label}.\n"
         f"Constantes: SpO2 {current_spo2}%, TAM {current_map} mmHg, FR {current_rr}/min, T {current_temp}C.\n"
         f"Alertes recentes: {', '.join(alert_titles) if alert_titles else 'aucune'}.\n"
@@ -299,6 +303,7 @@ async def _build_terrain_guidance_for_report(
         "personalization_level": personalization_level,
         "diagnosis_decision": diagnosis_decision,
         "diagnosis_final": diagnosis_final,
+        "diagnosis_comment": diagnosis_comment,
         "immediate_actions": _clean_lines(
             structured.get("immediate_actions"),
             ["Poursuivre une surveillance clinique rapprochee."],

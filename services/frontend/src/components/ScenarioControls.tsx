@@ -51,7 +51,7 @@ export function ScenarioControls({
         <div style={{ display: "grid", gap: 4 }}>
           <div style={{ fontWeight: 800, color: "#0f172a" }}>Validation en aveugle</div>
           <div style={{ color: "#475569", fontSize: 14 }}>
-            Compare l'orientation initiale puis la reevaluation apres questionnaire avant de reveler la verite terrain.
+            Compare l'orientation initiale puis, si disponible, la reevaluation apres questionnaire avant de reveler la verite terrain.
           </div>
         </div>
         <button
@@ -69,7 +69,7 @@ export function ScenarioControls({
             opacity: !canReveal || revealed ? 0.75 : 1,
           }}
         >
-          {!canReveal ? "En attente du questionnaire" : revealed ? "Verite terrain revelee" : "Reveler la verite terrain"}
+          {!canReveal ? "Analyse initiale requise" : revealed ? "Verite terrain revelee" : "Reveler la verite terrain"}
         </button>
       </div>
 
@@ -93,7 +93,12 @@ export function ScenarioControls({
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
         <HypothesisCard title="Avant questionnaire" snapshot={beforeHypothesis} revealed={revealed} />
-        <HypothesisCard title="Apres questionnaire" snapshot={afterHypothesis} revealed={revealed} />
+        <HypothesisCard
+          title="Apres questionnaire"
+          snapshot={afterHypothesis}
+          revealed={revealed}
+          emptyText="Aucun questionnaire declenche pour ce cas."
+        />
       </div>
 
       <div style={{ color: "#475569", fontSize: 14 }}>{helperText}</div>
@@ -121,10 +126,12 @@ function HypothesisCard({
   title,
   snapshot,
   revealed,
+  emptyText = "Evaluation indisponible pour le moment.",
 }: {
   title: string;
   snapshot: ScenarioHypothesisSnapshot | null;
   revealed: boolean;
+  emptyText?: string;
 }) {
   return (
     <div style={{ borderRadius: 14, padding: 14, border: "1px solid #dbeafe", background: "#ffffff", display: "grid", gap: 8 }}>
@@ -158,7 +165,7 @@ function HypothesisCard({
         </>
       ) : (
         <div style={{ color: "#64748b", fontSize: 14 }}>
-          Evaluation indisponible pour le moment.
+          {emptyText}
         </div>
       )}
     </div>

@@ -549,11 +549,13 @@ def _action_tables(report: dict[str, Any], width: float, styles: StyleSheet1) ->
     guidance_warning = str(terrain_guidance_llm.get("warning") or "")
     personalization_level = str(terrain_guidance_llm.get("personalization_level") or "")
     diagnosis_line = ""
+    diagnosis_comment = ""
     if has_reworked_guidance:
         diagnosis_line = (
             f"Validation medecin: {terrain_guidance_llm.get('diagnosis_decision')} - "
             f"Diagnostic final: {terrain_guidance_llm.get('diagnosis_final')}"
         )
+        diagnosis_comment = str(terrain_guidance_llm.get("diagnosis_comment") or "").strip()
 
     terrain_lines = []
     for row in terrain_guidance:
@@ -591,6 +593,11 @@ def _action_tables(report: dict[str, Any], width: float, styles: StyleSheet1) ->
                     + _escape(transmission_summary or "Transmission non disponible.")
                     + (f"<br/><br/><b>Personnalisation</b><br/>{_escape(personalization_level)}" if personalization_level else "")
                     + (f"<br/><br/><b>Validation</b><br/>{_escape(diagnosis_line)}" if diagnosis_line else "")
+                    + (
+                        f"<br/><br/><b>Commentaire medecin</b><br/>{_escape(diagnosis_comment)}"
+                        if diagnosis_comment
+                        else ""
+                    )
                     + (
                         f"<br/><br/><b>Sources citees</b><br/>{_escape('; '.join(guidance_sources))}"
                         if isinstance(guidance_sources, list) and guidance_sources

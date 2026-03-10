@@ -17,6 +17,8 @@ from app.ml.anomaly import AnomalyService
 from app.ml.criticity_service import CriticityMLService
 from app.mqtt.consumer import MQTTConsumer
 from app.routers import alerts, export, llm, ml, notifications, patients, trends
+from app.routers.push import router as push_router
+from app.services.webpush import WebPushService
 from app.routers.patients import _build_refresh_assignments, _default_monitoring_level
 from app.settings import load_settings
 from app.storage.influx import InfluxStorage, MemoryInfluxStorage
@@ -56,6 +58,7 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
         )
         knowledge_base = LocalKnowledgeBase(settings.kb_root)
         questionnaire_engine = QuestionnaireEngine(settings.questionnaire_rules_path)
+        webpush_service = WebPushService(settings=settings, postgres=postgres)
         consumer = MQTTConsumer(
             settings=settings,
             state=state,
@@ -64,6 +67,7 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
             ml_service=ml_service,
             alert_engine=alert_engine,
             ws_manager=ws_manager,
+            webpush_service=webpush_service,
             loop=loop,
             last_vitals=last_vitals,
         )
@@ -80,6 +84,7 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
             llm_client=llm_client,
             knowledge_base=knowledge_base,
             questionnaire_engine=questionnaire_engine,
+            webpush_service=webpush_service,
             consumer=consumer,
         )
         if not settings.test_mode:
@@ -136,6 +141,7 @@ def create_app(test_mode: bool | None = None) -> FastAPI:
     app.include_router(ml.router)
     app.include_router(llm.router)
     app.include_router(notifications.router)
+    app.include_router(push_router)
 
     @app.get("/")
     def root():

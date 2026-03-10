@@ -130,6 +130,10 @@ export interface ClinicalPackageResponse {
   source: "ollama" | "rule-based";
   llm_status?: "ollama" | "rule-based" | "llm-unavailable" | "disabled";
   patient_id: string;
+  analysis_mode?: "pre_validation" | "post_validation";
+  validated_diagnosis?: string | null;
+  diagnosis_category?: string | null;
+  surgery_category?: string | null;
   summary_text: string;
   explanatory_score: ExplanatoryScore;
   analysis_state: AnalysisStateSnapshot;
@@ -167,7 +171,9 @@ export interface MlFeedbackRecord {
   pathology?: string | null;
   diagnosis_decision?: "validated" | "rejected" | null;
   final_diagnosis?: string | null;
+  final_diagnosis_class?: string | null;
   surgery_type?: string | null;
+  surgery_class?: string | null;
   has_critical?: number | null;
   created_at: string;
 }
@@ -203,6 +209,7 @@ export interface MlFeedbackPayload {
   pathology?: string;
   diagnosis_decision?: "validated" | "rejected";
   final_diagnosis?: string;
+  final_diagnosis_class?: string;
   alert_id?: number;
   comment?: string;
 }
@@ -218,8 +225,11 @@ export interface TerrainGuidanceResponse {
   source: "ollama" | "rule-based";
   llm_status: "ollama" | "rule-based" | "llm-unavailable" | "disabled";
   patient_id: string;
+  analysis_mode?: "post_validation";
   diagnosis_decision: "validated" | "rejected";
   diagnosis_final: string;
+  diagnosis_category?: string;
+  surgery_category?: string;
   personalization_level: "low" | "medium" | "high";
   warning: string;
   immediate_actions: string[];

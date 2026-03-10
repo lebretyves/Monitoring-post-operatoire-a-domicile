@@ -21,6 +21,7 @@ class MLFeedbackRequest(BaseModel):
     pathology: str | None = None
     diagnosis_decision: Literal["validated", "rejected"] | None = None
     final_diagnosis: str | None = None
+    final_diagnosis_class: str | None = None
     alert_id: int | None = None
     comment: str = Field(default="", max_length=500)
 
@@ -178,6 +179,7 @@ def store_ml_feedback(patient_id: str, payload: MLFeedbackRequest, request: Requ
         pathology=sample["pathology"],
         diagnosis_decision=payload.diagnosis_decision,
         final_diagnosis=payload.final_diagnosis,
+        final_diagnosis_class=payload.final_diagnosis_class,
         surgery_type=sample["surgery_type"],
         has_critical=effective_label,
     )

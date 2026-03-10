@@ -82,3 +82,19 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_notifications_patient_created_at ON notifications (patient_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications (status);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id BIGSERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_agent TEXT,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_active
+ON push_subscriptions (user_id, active);

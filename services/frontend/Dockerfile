@@ -7,6 +7,7 @@ RUN npm install
 
 COPY vite.config.ts .
 COPY src ./src
+COPY public ./public
 
 RUN printf '%s\n' \
   '<!doctype html>' \

@@ -8,6 +8,8 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
+from app.llm.validated_categories import infer_diagnosis_category, infer_surgery_category
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -50,6 +52,28 @@ class PostgresStorage:
                 """
                 CREATE INDEX IF NOT EXISTS idx_notifications_status
                 ON notifications (status)
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS push_subscriptions (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    endpoint TEXT NOT NULL UNIQUE,
+                    p256dh TEXT NOT NULL,
+                    auth TEXT NOT NULL,
+                    user_agent TEXT,
+                    active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_active
+                ON push_subscriptions (user_id, active)
                 """
             )
             cur.execute(
@@ -337,6 +361,82 @@ class PostgresStorage:
             )
             conn.commit()
 
+    def upsert_push_subscription(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        endpoint: str,
+        p256dh: str,
+        auth: str,
+        user_agent: str | None,
+    ) -> dict[str, Any]:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO push_subscriptions (
+                    user_id,
+                    device_id,
+                    endpoint,
+                    p256dh,
+                    auth,
+                    user_agent,
+                    active,
+                    last_seen_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, TRUE, NOW())
+                ON CONFLICT (endpoint) DO UPDATE SET
+                    user_id = EXCLUDED.user_id,
+                    device_id = EXCLUDED.device_id,
+                    p256dh = EXCLUDED.p256dh,
+                    auth = EXCLUDED.auth,
+                    user_agent = EXCLUDED.user_agent,
+                    active = TRUE,
+                    last_seen_at = NOW()
+                RETURNING id, user_id, device_id, endpoint, p256dh, auth, user_agent, active, created_at, last_seen_at
+                """,
+                (user_id, device_id, endpoint, p256dh, auth, user_agent),
+            )
+            row = cur.fetchone()
+            conn.commit()
+        row["created_at"] = row["created_at"].isoformat()
+        row["last_seen_at"] = row["last_seen_at"].isoformat()
+        return row
+
+    def deactivate_push_subscription(self, endpoint: str) -> bool:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE push_subscriptions
+                SET active = FALSE,
+                    last_seen_at = NOW()
+                WHERE endpoint = %s
+                """,
+                (endpoint,),
+            )
+            updated = cur.rowcount > 0
+            conn.commit()
+        return updated
+
+    def list_active_push_subscriptions(self, user_id: str | None = None) -> list[dict[str, Any]]:
+        query = """
+            SELECT id, user_id, device_id, endpoint, p256dh, auth, user_agent, active, created_at, last_seen_at
+            FROM push_subscriptions
+            WHERE active = TRUE
+        """
+        params: tuple[Any, ...] = ()
+        if user_id:
+            query += " AND user_id = %s"
+            params = (user_id,)
+        query += " ORDER BY last_seen_at DESC"
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        for row in rows:
+            row["created_at"] = row["created_at"].isoformat()
+            row["last_seen_at"] = row["last_seen_at"].isoformat()
+        return rows
+
     def store_note(self, patient_id: str, content: str, note_type: str = "summary", source: str = "rule-based") -> None:
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -535,16 +635,26 @@ class PostgresStorage:
         pathology: str | None = None,
         diagnosis_decision: str | None = None,
         final_diagnosis: str | None = None,
+        final_diagnosis_class: str | None = None,
         surgery_type: str | None = None,
+        surgery_class: str | None = None,
         has_critical: int | None = None,
     ) -> dict[str, Any]:
+        diagnosis_category = final_diagnosis_class or (
+            infer_diagnosis_category(final_diagnosis) if final_diagnosis else None
+        )
+        normalized_surgery_class = surgery_class or (
+            infer_surgery_category(surgery_type) if surgery_type else None
+        )
         metadata = json.dumps(
             {
                 "comment": comment,
                 "pathology": pathology,
                 "diagnosis_decision": diagnosis_decision,
                 "final_diagnosis": final_diagnosis,
+                "final_diagnosis_class": diagnosis_category,
                 "surgery_type": surgery_type,
+                "surgery_class": normalized_surgery_class,
                 "has_critical": has_critical,
             }
         )
@@ -643,7 +753,9 @@ class PostgresStorage:
         row["pathology"] = payload.get("pathology")
         row["diagnosis_decision"] = payload.get("diagnosis_decision")
         row["final_diagnosis"] = payload.get("final_diagnosis")
+        row["final_diagnosis_class"] = payload.get("final_diagnosis_class")
         row["surgery_type"] = payload.get("surgery_type")
+        row["surgery_class"] = payload.get("surgery_class")
         row["has_critical"] = payload.get("has_critical")
         row["created_at"] = row["created_at"].isoformat()
         return row
@@ -664,9 +776,11 @@ class MemoryPostgresStorage:
         self.notes: list[dict[str, Any]] = []
         self.ml_feedback: list[dict[str, Any]] = []
         self.analysis_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        self.push_subscriptions: list[dict[str, Any]] = []
         self.next_alert_id = 1
         self.next_notification_id = 1
         self.next_feedback_id = 1
+        self.next_push_subscription_id = 1
 
     def close(self) -> None:
         return None
@@ -793,6 +907,57 @@ class MemoryPostgresStorage:
             notification for notification in self.notifications if notification["patient_id"] != patient_id
         ]
 
+    def upsert_push_subscription(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        endpoint: str,
+        p256dh: str,
+        auth: str,
+        user_agent: str | None,
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        for row in self.push_subscriptions:
+            if row["endpoint"] == endpoint:
+                row["user_id"] = user_id
+                row["device_id"] = device_id
+                row["p256dh"] = p256dh
+                row["auth"] = auth
+                row["user_agent"] = user_agent
+                row["active"] = True
+                row["last_seen_at"] = now
+                return dict(row)
+        created = {
+            "id": self.next_push_subscription_id,
+            "user_id": user_id,
+            "device_id": device_id,
+            "endpoint": endpoint,
+            "p256dh": p256dh,
+            "auth": auth,
+            "user_agent": user_agent,
+            "active": True,
+            "created_at": now,
+            "last_seen_at": now,
+        }
+        self.next_push_subscription_id += 1
+        self.push_subscriptions.append(created)
+        return dict(created)
+
+    def deactivate_push_subscription(self, endpoint: str) -> bool:
+        for row in self.push_subscriptions:
+            if row["endpoint"] == endpoint:
+                row["active"] = False
+                row["last_seen_at"] = _utc_now()
+                return True
+        return False
+
+    def list_active_push_subscriptions(self, user_id: str | None = None) -> list[dict[str, Any]]:
+        rows = [row for row in self.push_subscriptions if row.get("active")]
+        if user_id:
+            rows = [row for row in rows if row.get("user_id") == user_id]
+        return [dict(row) for row in rows]
+
     def store_note(self, patient_id: str, content: str, note_type: str = "summary", source: str = "rule-based") -> None:
         self.notes.append(
             {
@@ -882,9 +1047,17 @@ class MemoryPostgresStorage:
         pathology: str | None = None,
         diagnosis_decision: str | None = None,
         final_diagnosis: str | None = None,
+        final_diagnosis_class: str | None = None,
         surgery_type: str | None = None,
+        surgery_class: str | None = None,
         has_critical: int | None = None,
     ) -> dict[str, Any]:
+        diagnosis_category = final_diagnosis_class or (
+            infer_diagnosis_category(final_diagnosis) if final_diagnosis else None
+        )
+        normalized_surgery_class = surgery_class or (
+            infer_surgery_category(surgery_type) if surgery_type else None
+        )
         row = {
             "id": self.next_feedback_id,
             "patient_id": patient_id,
@@ -894,7 +1067,9 @@ class MemoryPostgresStorage:
             "pathology": pathology,
             "diagnosis_decision": diagnosis_decision,
             "final_diagnosis": final_diagnosis,
+            "final_diagnosis_class": diagnosis_category,
             "surgery_type": surgery_type,
+            "surgery_class": normalized_surgery_class,
             "has_critical": has_critical,
             "created_at": _utc_now(),
         }

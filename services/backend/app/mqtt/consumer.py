@@ -23,6 +23,7 @@ class MQTTConsumer:
         ml_service,
         alert_engine,
         ws_manager,
+        webpush_service,
         loop: asyncio.AbstractEventLoop,
         last_vitals: dict[str, dict[str, Any]],
     ) -> None:
@@ -33,6 +34,7 @@ class MQTTConsumer:
         self.ml_service = ml_service
         self.alert_engine = alert_engine
         self.ws_manager = ws_manager
+        self.webpush_service = webpush_service
         self.loop = loop
         self.last_vitals = last_vitals
         self.client = mqtt.Client(client_id="postop-backend-consumer")
@@ -127,5 +129,9 @@ class MQTTConsumer:
             )
             asyncio.run_coroutine_threadsafe(
                 self.ws_manager.broadcast(notification_event(notification)),
+                self.loop,
+            )
+            asyncio.run_coroutine_threadsafe(
+                self.webpush_service.dispatch_notification(notification),
                 self.loop,
             )
