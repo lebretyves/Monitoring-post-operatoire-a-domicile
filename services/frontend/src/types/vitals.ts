@@ -94,15 +94,6 @@ export interface QuestionnaireSubmission {
   answers: QuestionnaireAnswer[];
 }
 
-export interface SummaryResponse {
-  patient_id: string;
-  source: string;
-  llm_status?: "ollama" | "rule-based" | "llm-unavailable" | "disabled";
-  summary: string;
-  clinical_context?: ClinicalContextSelection;
-  analysis_state?: AnalysisStateSnapshot;
-}
-
 export interface ClinicalHypothesisRow {
   label: string;
   compatibility: "high" | "medium" | "low";
@@ -174,6 +165,8 @@ export interface MlFeedbackRecord {
   label: string;
   comment: string;
   pathology?: string | null;
+  diagnosis_decision?: "validated" | "rejected" | null;
+  final_diagnosis?: string | null;
   surgery_type?: string | null;
   has_critical?: number | null;
   created_at: string;
@@ -208,6 +201,30 @@ export interface MlFeedbackPayload {
   decision: "validate" | "invalidate";
   target?: "critical" | "non_critical";
   pathology?: string;
+  diagnosis_decision?: "validated" | "rejected";
+  final_diagnosis?: string;
   alert_id?: number;
   comment?: string;
+}
+
+export interface TerrainGuidanceRequest {
+  patient_factors: string[];
+  perioperative_context: string[];
+  free_text: string;
+  questionnaire?: QuestionnaireSubmission | null;
+}
+
+export interface TerrainGuidanceResponse {
+  source: "ollama" | "rule-based";
+  llm_status: "ollama" | "rule-based" | "llm-unavailable" | "disabled";
+  patient_id: string;
+  diagnosis_decision: "validated" | "rejected";
+  diagnosis_final: string;
+  personalization_level: "low" | "medium" | "high";
+  warning: string;
+  immediate_actions: string[];
+  surveillance_points: string[];
+  escalation_triggers: string[];
+  transmission_summary: string;
+  cited_sources: string[];
 }

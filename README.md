@@ -107,7 +107,6 @@ Ports par defaut:
 - `POST /api/alerts/{alert_id}/ack`
 - `GET /api/export/{patient_id}/csv`
 - `GET /api/export/{patient_id}/pdf`
-- `GET /api/summaries/{patient_id}`
 - `GET /api/llm/{patient_id}/scenario-review`
 - `GET /api/llm/{patient_id}/clinical-package`
 - `GET /api/llm/prioritize/patients`

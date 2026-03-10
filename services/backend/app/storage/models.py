@@ -53,9 +53,3 @@ class AlertRecord(BaseModel):
 class TrendPoint(BaseModel):
     ts: str
     values: dict[str, float]
-
-
-class SummaryResponse(BaseModel):
-    patient_id: str
-    source: str
-    summary: str

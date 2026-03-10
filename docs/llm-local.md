@@ -58,7 +58,6 @@ docker compose up --build -d backend
 
 ## Endpoints utiles
 
-- `GET /api/summaries/{patient_id}`
 - `GET /api/llm/{patient_id}/scenario-review`
 
 ## Bonnes pratiques retenues

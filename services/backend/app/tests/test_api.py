@@ -115,7 +115,7 @@ def test_patients_and_trends_endpoints() -> None:
                 assert llm_package_response.json()["patient_id"] == "PAT-001"
 
                 contextual_summary_response = client.post(
-                    "/api/summaries/PAT-001/analyze",
+                    "/api/llm/PAT-001/clinical-package",
                     json={
                         "patient_factors": ["Diabete", "Obesite"],
                         "perioperative_context": ["ASA >= 3"],
@@ -123,10 +123,20 @@ def test_patients_and_trends_endpoints() -> None:
                     },
                 )
                 assert contextual_summary_response.status_code == 200
-                assert contextual_summary_response.json()["clinical_context"]["patient_factors"] == [
+                assert contextual_summary_response.json()["patient_factors"] == [
                     "Diabete",
                     "Obesite",
                 ]
+
+                terrain_guidance_locked = client.post(
+                    "/api/llm/PAT-001/terrain-guidance",
+                    json={
+                        "patient_factors": [],
+                        "perioperative_context": [],
+                        "free_text": "",
+                    },
+                )
+                assert terrain_guidance_locked.status_code == 412
 
                 ml_feedback_response = client.post(
                     "/api/ml/PAT-001/feedback",
@@ -134,11 +144,28 @@ def test_patients_and_trends_endpoints() -> None:
                         "decision": "validate",
                         "target": "non_critical",
                         "pathology": "Constantes Normales",
+                        "diagnosis_decision": "validated",
+                        "final_diagnosis": "Constantes post-operatoires stables",
                         "comment": "Temoin sain confirme",
                     },
                 )
                 assert ml_feedback_response.status_code == 200
                 assert ml_feedback_response.json()["has_critical"] == 0
+
+                terrain_guidance_ready = client.post(
+                    "/api/llm/PAT-001/terrain-guidance",
+                    json={
+                        "patient_factors": [],
+                        "perioperative_context": [],
+                        "free_text": "",
+                    },
+                )
+                assert terrain_guidance_ready.status_code == 200
+                terrain_payload = terrain_guidance_ready.json()
+                assert terrain_payload["patient_id"] == "PAT-001"
+                assert terrain_payload["diagnosis_decision"] == "validated"
+                assert terrain_payload["personalization_level"] == "low"
+                assert "generaliste" in terrain_payload["warning"].lower()
 
                 services.postgres.store_ml_feedback(
                     patient_id="PAT-005",
@@ -325,6 +352,25 @@ def test_export_pdf_contains_clinical_sections() -> None:
                 assert "Questionnaire differentiel" in payload
                 assert "Conduite a tenir / surveillance" in payload
                 assert "Impact du questionnaire differentiel" in payload
+                assert "EN ATTENTE DE VALIDATION MEDICALE" in payload
+
+                feedback_response = client.post(
+                    "/api/ml/PAT-002/feedback",
+                    json={
+                        "decision": "validate",
+                        "target": "non_critical",
+                        "pathology": "Pathologie revisee",
+                        "diagnosis_decision": "validated",
+                        "final_diagnosis": "Etat post-operatoire stabilise",
+                        "comment": "Validation et signature medecin.",
+                    },
+                )
+                assert feedback_response.status_code == 200
+
+                validated_response = client.get("/api/export/PAT-002/pdf")
+                assert validated_response.status_code == 200
+                validated_payload = validated_response.content.decode("latin-1", errors="ignore")
+                assert "VALIDATION MEDICALE" in validated_payload
     finally:
         if previous_runtime_dir is None:
             os.environ.pop("ML_RUNTIME_DIR", None)
@@ -815,10 +861,6 @@ def test_clinical_package_cache_and_resting_state_persist() -> None:
                 second_payload = second_response.json()
                 assert second_payload["analysis_state"]["cache_status"] == "cached"
                 assert second_payload["summary_text"] == first_payload["summary_text"]
-
-                summary_response = client.get("/api/summaries/PAT-002")
-                assert summary_response.status_code == 200
-                assert summary_response.json()["summary"] == second_payload["summary_text"]
 
                 questionnaire_response = client.post(
                     "/api/llm/PAT-002/clinical-package",

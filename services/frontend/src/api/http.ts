@@ -7,7 +7,8 @@ import type {
   PatientSummary,
   PrioritizationResponse,
   QuestionnaireSelectionResponse,
-  SummaryResponse,
+  TerrainGuidanceRequest,
+  TerrainGuidanceResponse,
   TrendResponse,
   VitalPayload
 } from "../types/vitals";
@@ -113,25 +114,6 @@ export function markNotificationRead(notificationId: number): Promise<Notificati
   );
 }
 
-export function getSummary(patientId: string): Promise<SummaryResponse> {
-  return readJson<SummaryResponse>(`/api/summaries/${patientId}`);
-}
-
-export function analyzeSummary(patientId: string, clinicalContext: ClinicalContextSelection): Promise<SummaryResponse> {
-  return fetch(`${API_BASE}/api/summaries/${patientId}/analyze`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(clinicalContext)
-  }).then(async (response) => {
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} on contextual summary analysis`);
-    }
-    return response.json() as Promise<SummaryResponse>;
-  });
-}
-
 export function getClinicalPackage(patientId: string): Promise<ClinicalPackageResponse> {
   return readJson<ClinicalPackageResponse>(`/api/llm/${patientId}/clinical-package`);
 }
@@ -160,6 +142,25 @@ export function analyzeClinicalPackage(
 
 export function getPrioritizedPatients(): Promise<PrioritizationResponse> {
   return readJson<PrioritizationResponse>("/api/llm/prioritize/patients");
+}
+
+export function generateTerrainGuidance(
+  patientId: string,
+  payload: TerrainGuidanceRequest
+): Promise<TerrainGuidanceResponse> {
+  return fetch(`${API_BASE}/api/llm/${patientId}/terrain-guidance`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  }).then(async (response) => {
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: `HTTP ${response.status} on terrain guidance` }));
+      throw new Error(err.detail ?? `HTTP ${response.status} on terrain guidance`);
+    }
+    return response.json() as Promise<TerrainGuidanceResponse>;
+  });
 }
 
 export function getMlPrediction(patientId: string): Promise<MlPredictionResponse> {

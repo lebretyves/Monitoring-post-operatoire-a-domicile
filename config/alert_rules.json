@@ -6,7 +6,7 @@
   "thresholds": {
     "spo2": { "info": 94, "warning": 92, "critical": 90 },
     "hr": { "info": 110, "warning": 130, "critical": 135 },
-    "sbp": { "info": 100, "warning": 90, "critical": 80 },
+    "sbp": { "info": 100, "warning": 90, "critical": 90 },
     "map": { "warning": 70, "critical": 65 },
     "rr": { "info": 22, "warning": 25, "critical": 30 },
     "temp": { "info": 38.0, "warning": 38.5, "critical": 39.0, "low_critical": 36.0 },

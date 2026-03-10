@@ -19,6 +19,8 @@ class MLFeedbackRequest(BaseModel):
     decision: Literal["validate", "invalidate"] = "validate"
     target: Literal["critical", "non_critical"] | None = None
     pathology: str | None = None
+    diagnosis_decision: Literal["validated", "rejected"] | None = None
+    final_diagnosis: str | None = None
     alert_id: int | None = None
     comment: str = Field(default="", max_length=500)
 
@@ -174,6 +176,8 @@ def store_ml_feedback(patient_id: str, payload: MLFeedbackRequest, request: Requ
         comment=payload.comment,
         alert_id=payload.alert_id,
         pathology=sample["pathology"],
+        diagnosis_decision=payload.diagnosis_decision,
+        final_diagnosis=payload.final_diagnosis,
         surgery_type=sample["surgery_type"],
         has_critical=effective_label,
     )

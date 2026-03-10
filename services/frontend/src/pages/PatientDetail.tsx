@@ -7,6 +7,7 @@ import {
   analyzeClinicalPackage,
   exportCsvUrl,
   exportPdfUrl,
+  generateTerrainGuidance,
   getAlerts,
   getClinicalPackage,
   getDifferentialQuestionnaire,
@@ -33,6 +34,7 @@ import type {
   ClinicalHypothesisRow,
   ClinicalContextSelection,
   ClinicalPackageResponse,
+  TerrainGuidanceResponse,
   MlPredictionResponse,
   PatientSummary,
   QuestionnaireSelectionResponse,
@@ -51,6 +53,7 @@ interface AnalysisRestState {
 }
 
 type RestAnchorVitals = Pick<VitalPayload, "ts" | "hr" | "spo2" | "map" | "rr" | "temp" | "shock_index">;
+type PathologyReviewStatus = "pending" | "validated" | "rejected";
 const EMPTY_QUESTIONNAIRE_SELECTION: QuestionnaireSubmission = {
   responder: "patient",
   answers: [],
@@ -83,6 +86,9 @@ export function PatientDetailPage() {
   const [mlPrediction, setMlPrediction] = useState<MlPredictionResponse | null>(null);
   const [mlPathology, setMlPathology] = useState("");
   const [mlComment, setMlComment] = useState("");
+  const [pathologyReviewStatus, setPathologyReviewStatus] = useState<PathologyReviewStatus>("pending");
+  const [terrainGuidanceStatus, setTerrainGuidanceStatus] = useState("idle");
+  const [terrainGuidance, setTerrainGuidance] = useState<TerrainGuidanceResponse | null>(null);
   const [mlStatus, setMlStatus] = useState("idle");
   const [mlMessage, setMlMessage] = useState("");
   const [questionnaire, setQuestionnaire] = useState<QuestionnaireSelectionResponse | null>(null);
@@ -108,6 +114,15 @@ export function PatientDetailPage() {
   const activeAlerts = alerts.filter((alert) => alert.metric_snapshot.historical_backfill !== true);
   const historicalAlerts = alerts.filter((alert) => alert.metric_snapshot.historical_backfill === true);
   const questionnaireRestMessage = buildAnalysisRestMessage(analysisRestState);
+  const hasAntecedents =
+    clinicalContextSelection.patient_factors.length > 0 ||
+    clinicalContextSelection.perioperative_context.length > 0 ||
+    clinicalContextSelection.free_text.trim().length > 0;
+  const storedPathologyReview =
+    mlPrediction?.recent_feedback.find(
+      (feedback) => feedback.diagnosis_decision === "validated" || feedback.diagnosis_decision === "rejected"
+    ) ?? null;
+  const hasMedicalValidation = pathologyReviewStatus !== "pending" || storedPathologyReview !== null;
   const blindValidation = buildBlindValidationState(
     currentPathology,
     questionnaireComparison?.before ?? baselineClinicalPackage?.hypothesis_ranking ?? null,
@@ -129,6 +144,9 @@ export function PatientDetailPage() {
     setQuestionnaireSubmitStatus("idle");
     setClinicalContextSelection(EMPTY_CLINICAL_CONTEXT);
     setQuestionnaireSelection(EMPTY_QUESTIONNAIRE_SELECTION);
+    setPathologyReviewStatus("pending");
+    setTerrainGuidance(null);
+    setTerrainGuidanceStatus("idle");
     setQuestionnaireCollapsed(true);
     setScenarioRevealed(false);
     setAnalysisRestState({
@@ -529,6 +547,43 @@ export function PatientDetailPage() {
     }
   }
 
+  async function handlePathologyReview(status: PathologyReviewStatus) {
+    if (!patientId || status === "pending") {
+      return;
+    }
+    const finalDiagnosis = mlPathology.trim();
+    const reason = mlComment.trim();
+    if (!finalDiagnosis) {
+      setMlMessage("Renseigne le diagnostic final avant validation/refus.");
+      return;
+    }
+    if (!reason) {
+      setMlMessage("Ajoute le motif clinique avant validation/refus.");
+      return;
+    }
+    setMlStatus("saving");
+    try {
+      await submitMlFeedback(patientId, {
+        decision: status === "validated" ? "validate" : "invalidate",
+        pathology: finalDiagnosis,
+        diagnosis_decision: status,
+        final_diagnosis: finalDiagnosis,
+        comment: reason,
+      });
+      setPathologyReviewStatus(status);
+      setMlMessage(
+        status === "validated"
+          ? `Pathologie validee par le medecin: ${finalDiagnosis}`
+          : `Pathologie refusee par le medecin. Diagnostic retenu: ${finalDiagnosis}`
+      );
+      await refreshMlPrediction();
+    } catch (error) {
+      setMlMessage(error instanceof Error ? error.message : "Impossible d'enregistrer la validation pathologie");
+    } finally {
+      setMlStatus("idle");
+    }
+  }
+
   async function handleMlTraining() {
     setMlStatus("training");
     try {
@@ -543,6 +598,26 @@ export function PatientDetailPage() {
       setMlMessage(error instanceof Error ? error.message : "Impossible d'entrainer le modele");
     } finally {
       setMlStatus("idle");
+    }
+  }
+
+  async function handleTerrainGuidance() {
+    if (!patientId) {
+      return;
+    }
+    setTerrainGuidanceStatus("loading");
+    try {
+      const response = await generateTerrainGuidance(patientId, {
+        patient_factors: clinicalContextSelection.patient_factors,
+        perioperative_context: clinicalContextSelection.perioperative_context,
+        free_text: clinicalContextSelection.free_text,
+        questionnaire: buildQuestionnairePayload(questionnaireSelection),
+      });
+      setTerrainGuidance(response);
+    } catch (error) {
+      setMlMessage(error instanceof Error ? error.message : "Impossible de generer la conduite a tenir.");
+    } finally {
+      setTerrainGuidanceStatus("idle");
     }
   }
 
@@ -586,7 +661,7 @@ export function PatientDetailPage() {
           <a href={exportCsvUrl(patientId)} style={linkButton}>
             Export CSV
           </a>
-          <a href={exportPdfUrl(patientId)} style={linkButton}>
+          <a href={exportPdfUrl(patientId)} style={linkButton} title="Exporter le rapport PDF">
             Export PDF
           </a>
         </div>
@@ -652,6 +727,69 @@ export function PatientDetailPage() {
         collapsible
         defaultCollapsed
       />
+      {!hasAntecedents ? (
+        <div style={{ color: "#b45309", fontSize: 13, fontWeight: 700 }}>
+          Aucun antecedent renseigne: la conduite a tenir sera plus generaliste et moins precise.
+        </div>
+      ) : null}
+
+      <section style={{ background: "#ffffff", borderRadius: 18, padding: 16, boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)", display: "grid", gap: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 800, color: "#0f172a" }}>Conduite a tenir (LLM a la demande)</div>
+          <button
+            type="button"
+            onClick={() => handleTerrainGuidance()}
+            style={darkButton}
+            disabled={!hasMedicalValidation || terrainGuidanceStatus === "loading"}
+          >
+            {terrainGuidanceStatus === "loading" ? "Generation..." : "Generer conduite a tenir"}
+          </button>
+        </div>
+        {!hasMedicalValidation ? (
+          <div style={{ color: "#b45309", fontSize: 13, fontWeight: 700 }}>
+            Validation medecin requise avant generation de la conduite a tenir.
+          </div>
+        ) : null}
+        {terrainGuidance ? (
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ color: "#334155", fontSize: 14 }}>
+              Source: {terrainGuidance.source} / {terrainGuidance.llm_status} - personnalisation: {terrainGuidance.personalization_level}
+            </div>
+            {terrainGuidance.warning ? (
+              <div style={{ color: "#b45309", fontSize: 13, fontWeight: 700 }}>{terrainGuidance.warning}</div>
+            ) : null}
+            <RiskExplainCard
+              title="Actions immediates"
+              level="priorite terrain"
+              items={terrainGuidance.immediate_actions}
+              emptyMessage="Aucune action immediate proposee."
+            />
+            <RiskExplainCard
+              title="Surveillance ciblee"
+              level="points de controle"
+              items={terrainGuidance.surveillance_points}
+              emptyMessage="Aucun point de surveillance specifique."
+            />
+            <RiskExplainCard
+              title="Criteres d'escalade"
+              level="securite"
+              items={terrainGuidance.escalation_triggers}
+              emptyMessage="Aucun critere d'escalade specifique."
+            />
+            <div style={{ borderRadius: 12, background: "#f8fafc", border: "1px solid #e2e8f0", padding: 12, display: "grid", gap: 8 }}>
+              <div style={{ fontWeight: 700, color: "#0f172a" }}>Resume de transmission retravaille</div>
+              <div style={{ color: "#334155", fontSize: 14 }}>{terrainGuidance.transmission_summary}</div>
+              <div style={{ color: "#64748b", fontSize: 13 }}>
+                Sources: {terrainGuidance.cited_sources.join(" ; ")}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ color: "#64748b", fontSize: 14 }}>
+            Lance la generation pour obtenir une conduite a tenir contextualisee apres validation medecin.
+          </div>
+        )}
+      </section>
 
       <section>
         <div style={{ background: "#ffffff", borderRadius: 18, padding: 16, boxShadow: "0 12px 24px rgba(15, 23, 42, 0.08)" }}>
@@ -972,6 +1110,22 @@ export function PatientDetailPage() {
         </label>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={() => handlePathologyReview("validated")}
+            style={primaryButton}
+            disabled={mlStatus !== "idle"}
+          >
+            Valider la pathologie
+          </button>
+          <button
+            type="button"
+            onClick={() => handlePathologyReview("rejected")}
+            style={secondaryButton}
+            disabled={mlStatus !== "idle"}
+          >
+            Refuser la pathologie
+          </button>
           <button type="button" onClick={() => handleMlFeedback("validate", "critical")} style={primaryButton} disabled={mlStatus !== "idle"}>
             Classer critique
           </button>

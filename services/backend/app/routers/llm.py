@@ -220,6 +220,47 @@ class QuestionnaireSelectionResponse(BaseModel):
     modules: list[QuestionnaireModuleResponse]
 
 
+class TerrainGuidanceRequest(BaseModel):
+    patient_factors: list[str] = Field(default_factory=list)
+    perioperative_context: list[str] = Field(default_factory=list)
+    free_text: str = ""
+    questionnaire: QuestionnaireResponsePayload | None = None
+
+
+class TerrainGuidanceResponse(BaseModel):
+    source: Literal["ollama", "rule-based"]
+    llm_status: Literal["ollama", "rule-based", "llm-unavailable", "disabled"] = "rule-based"
+    patient_id: str
+    diagnosis_decision: Literal["validated", "rejected"]
+    diagnosis_final: str
+    personalization_level: Literal["low", "medium", "high"]
+    warning: str = ""
+    immediate_actions: list[str]
+    surveillance_points: list[str]
+    escalation_triggers: list[str]
+    transmission_summary: str
+    cited_sources: list[str]
+
+
+TERRAIN_GUIDANCE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "immediate_actions": {"type": "array", "items": {"type": "string"}},
+        "surveillance_points": {"type": "array", "items": {"type": "string"}},
+        "escalation_triggers": {"type": "array", "items": {"type": "string"}},
+        "transmission_summary": {"type": "string"},
+        "cited_sources": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "immediate_actions",
+        "surveillance_points",
+        "escalation_triggers",
+        "transmission_summary",
+        "cited_sources",
+    ],
+}
+
+
 def _current_scenario_name(last_vitals: dict, patient: dict) -> str:
     return (
         last_vitals.get("scenario_label")
@@ -991,6 +1032,145 @@ async def differential_questionnaire(patient_id: str, request: Request):
             "modules": selection.modules,
         }
     )
+
+
+@router.post("/{patient_id}/terrain-guidance")
+async def terrain_guidance(
+    patient_id: str,
+    payload: TerrainGuidanceRequest,
+    request: Request,
+):
+    services, patient, last_vitals, scenario, surgery_type, alerts, _history_points = _load_patient_bundle(
+        patient_id,
+        request,
+        restrict_to_scenario=False,
+    )
+    recent_feedback = services.postgres.list_ml_feedback(patient_id=patient_id, limit=20)
+    diagnosis_feedback = next(
+        (
+            row
+            for row in recent_feedback
+            if row.get("diagnosis_decision") in {"validated", "rejected"}
+            and str(row.get("final_diagnosis") or "").strip()
+        ),
+        None,
+    )
+    if not diagnosis_feedback:
+        raise HTTPException(
+            status_code=412,
+            detail="Validation medecin de la pathologie requise avant la conduite a tenir.",
+        )
+
+    patient_factors = [item.strip() for item in payload.patient_factors if item.strip()]
+    periop_context = [item.strip() for item in payload.perioperative_context if item.strip()]
+    free_text = payload.free_text.strip()
+    context_count = len(patient_factors) + len(periop_context) + (1 if free_text else 0)
+    if context_count == 0:
+        personalization_level = "low"
+        warning = "Aucun antecedent renseigne: conduite plus generaliste et moins precise."
+    elif context_count <= 3:
+        personalization_level = "medium"
+        warning = ""
+    else:
+        personalization_level = "high"
+        warning = ""
+
+    current_map = int(round(float(last_vitals.get("map", 0) or 0)))
+    current_spo2 = int(round(float(last_vitals.get("spo2", 0) or 0)))
+    current_rr = int(round(float(last_vitals.get("rr", 0) or 0)))
+    current_temp = round(float(last_vitals.get("temp", 0) or 0), 1)
+    alert_titles = [str(alert.get("title") or "") for alert in alerts[:3] if str(alert.get("title") or "").strip()]
+    diagnosis_final = str(diagnosis_feedback.get("final_diagnosis") or "").strip()
+    diagnosis_decision = str(diagnosis_feedback.get("diagnosis_decision") or "validated").strip().lower()
+    if diagnosis_decision not in {"validated", "rejected"}:
+        diagnosis_decision = "validated"
+
+    kb_guidance = services.knowledge_base.get_excerpt("terrain_guidance") or "source non disponible"
+    kb_sources = services.knowledge_base.get_excerpt("terrain_sources") or "source non disponible"
+
+    prompt = (
+        "Tu dois produire une conduite a tenir post-operatoire contextualisee et prudente.\n"
+        "N'utilise que les donnees fournies. Ne pose pas de diagnostic certain.\n"
+        "Retourne uniquement un JSON conforme au schema.\n"
+        f"Patient: {patient_id}, chirurgie: {surgery_type}, scenario observe: {scenario}.\n"
+        f"Decision medecin: {diagnosis_decision}, diagnostic final: {diagnosis_final}.\n"
+        f"Constantes recentes: SpO2 {current_spo2}%, TAM {current_map} mmHg, FR {current_rr}/min, T {current_temp}C.\n"
+        f"Alertes recentes: {', '.join(alert_titles) if alert_titles else 'aucune'}\n"
+        f"Terrain patient: {', '.join(patient_factors) if patient_factors else 'aucun'}\n"
+        f"Contexte peri-op: {', '.join(periop_context) if periop_context else 'aucun'}\n"
+        f"Commentaire libre: {free_text or 'aucun'}\n"
+        f"Personnalisation attendue: {personalization_level}.\n"
+        f"KB guidance:\n{kb_guidance}\n"
+        f"KB sources:\n{kb_sources}\n"
+    )
+    structured = await services.llm_client.generate_structured(
+        prompt,
+        TERRAIN_GUIDANCE_SCHEMA,
+        system=(
+            "Assistant clinique prudent de reformulation de conduite a tenir. "
+            "Sortie JSON stricte. Toujours inclure des criteres d'escalade et des sources citees."
+        ),
+    )
+
+    source = "ollama"
+    llm_status = "ollama"
+    if not isinstance(structured, dict):
+        source = "rule-based"
+        llm_status = "llm-unavailable" if services.settings.enable_llm else "disabled"
+        structured = {
+            "immediate_actions": [
+                "Reevaluer constants, signes fonctionnels et tolerance clinique dans l'heure.",
+                "Documenter clairement la decision medicale et le diagnostic final dans la transmission.",
+            ],
+            "surveillance_points": [
+                "Surveiller SpO2, FR, TAM, FC, temperature et symptomes associes.",
+                "Rechercher toute derive par rapport aux mesures precedentes et aux alertes recentes.",
+            ],
+            "escalation_triggers": [
+                "Escalader si dyspnee brutale, desaturation, hypotension, malaise, douleur thoracique ou confusion.",
+                "Escalader si aggravation clinique malgre surveillance rapprochee.",
+            ],
+            "transmission_summary": (
+                f"Diagnostic final medical: {diagnosis_final}. "
+                "Conduite a tenir adaptee au terrain, avec vigilance sur les signaux de deterioration."
+            ),
+            "cited_sources": ["kb/postop-terrain-context-guidance.md", "kb/postop-terrain-context-sources.md"],
+        }
+
+    def _clean_lines(value: object, fallback: list[str]) -> list[str]:
+        if not isinstance(value, list):
+            return fallback
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return cleaned or fallback
+
+    response_payload = {
+        "source": source,
+        "llm_status": llm_status,
+        "patient_id": patient_id,
+        "diagnosis_decision": diagnosis_decision,
+        "diagnosis_final": diagnosis_final,
+        "personalization_level": personalization_level,
+        "warning": warning,
+        "immediate_actions": _clean_lines(
+            structured.get("immediate_actions"),
+            ["Poursuivre la surveillance clinique rapprochee selon le risque evolutif."],
+        )[:6],
+        "surveillance_points": _clean_lines(
+            structured.get("surveillance_points"),
+            ["Recontroler constantes et signes fonctionnels a intervalle rapproche."],
+        )[:6],
+        "escalation_triggers": _clean_lines(
+            structured.get("escalation_triggers"),
+            ["Escalade immediate en cas de deterioration clinique brutale ou mal toleree."],
+        )[:6],
+        "transmission_summary": str(structured.get("transmission_summary") or "").strip()
+        or f"Diagnostic final medical: {diagnosis_final}.",
+        "cited_sources": _clean_lines(
+            structured.get("cited_sources"),
+            ["kb/postop-terrain-context-guidance.md", "kb/postop-terrain-context-sources.md"],
+        )[:6],
+    }
+    return TerrainGuidanceResponse.model_validate(response_payload)
 
 
 def _normalize_structured_review(

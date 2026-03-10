@@ -32,10 +32,6 @@
 - `GET /api/export/{patient_id}/csv`
 - `GET /api/export/{patient_id}/pdf`
 
-## Summary
-
-- `GET /api/summaries/{patient_id}`
-
 ## LLM
 
 - `GET /api/llm/{patient_id}/scenario-review`

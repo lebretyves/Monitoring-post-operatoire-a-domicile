@@ -533,6 +533,8 @@ class PostgresStorage:
         *,
         alert_id: int | None = None,
         pathology: str | None = None,
+        diagnosis_decision: str | None = None,
+        final_diagnosis: str | None = None,
         surgery_type: str | None = None,
         has_critical: int | None = None,
     ) -> dict[str, Any]:
@@ -540,6 +542,8 @@ class PostgresStorage:
             {
                 "comment": comment,
                 "pathology": pathology,
+                "diagnosis_decision": diagnosis_decision,
+                "final_diagnosis": final_diagnosis,
                 "surgery_type": surgery_type,
                 "has_critical": has_critical,
             }
@@ -637,6 +641,8 @@ class PostgresStorage:
             payload = {"comment": row.get("comment", "")}
         row["comment"] = payload.get("comment", "")
         row["pathology"] = payload.get("pathology")
+        row["diagnosis_decision"] = payload.get("diagnosis_decision")
+        row["final_diagnosis"] = payload.get("final_diagnosis")
         row["surgery_type"] = payload.get("surgery_type")
         row["has_critical"] = payload.get("has_critical")
         row["created_at"] = row["created_at"].isoformat()
@@ -874,6 +880,8 @@ class MemoryPostgresStorage:
         *,
         alert_id: int | None = None,
         pathology: str | None = None,
+        diagnosis_decision: str | None = None,
+        final_diagnosis: str | None = None,
         surgery_type: str | None = None,
         has_critical: int | None = None,
     ) -> dict[str, Any]:
@@ -884,6 +892,8 @@ class MemoryPostgresStorage:
             "label": label,
             "comment": comment,
             "pathology": pathology,
+            "diagnosis_decision": diagnosis_decision,
+            "final_diagnosis": final_diagnosis,
             "surgery_type": surgery_type,
             "has_critical": has_critical,
             "created_at": _utc_now(),

@@ -533,35 +533,74 @@ def _analysis_notes_block(report: dict[str, Any], width: float, styles: StyleShe
 
 def _action_tables(report: dict[str, Any], width: float, styles: StyleSheet1) -> Table:
     final_analysis = report["final_analysis"]
-    action_list = final_analysis.recheck_recommendations or ["Poursuivre la surveillance clinique et reevaluer si derive des constantes."]
+    terrain_guidance_llm = report.get("terrain_guidance_llm") or {}
+    has_reworked_guidance = bool(terrain_guidance_llm.get("available"))
+    action_list = (
+        terrain_guidance_llm.get("immediate_actions")
+        if has_reworked_guidance
+        else final_analysis.recheck_recommendations
+    ) or ["Poursuivre la surveillance clinique et reevaluer si derive des constantes."]
     contingency = report["contingency_points"]
     terrain_guidance = report["terrain_guidance"]
+    surveillance_points = terrain_guidance_llm.get("surveillance_points") if has_reworked_guidance else []
+    escalation_points = terrain_guidance_llm.get("escalation_triggers") if has_reworked_guidance else []
+    transmission_summary = terrain_guidance_llm.get("transmission_summary") if has_reworked_guidance else ""
+    guidance_sources = terrain_guidance_llm.get("cited_sources") if has_reworked_guidance else []
+    guidance_warning = str(terrain_guidance_llm.get("warning") or "")
+    personalization_level = str(terrain_guidance_llm.get("personalization_level") or "")
+    diagnosis_line = ""
+    if has_reworked_guidance:
+        diagnosis_line = (
+            f"Validation medecin: {terrain_guidance_llm.get('diagnosis_decision')} - "
+            f"Diagnostic final: {terrain_guidance_llm.get('diagnosis_final')}"
+        )
 
     terrain_lines = []
     for row in terrain_guidance:
         terrain_lines.append(f"<b>{_escape(row['title'])}</b><br/>- {_escape(row['surveillance'])}<br/>- {_escape(row['prudence'])}")
     if not terrain_lines:
         terrain_lines.append("Aucun terrain particulier identifie dans les donnees structurees.")
+    if has_reworked_guidance and isinstance(surveillance_points, list) and surveillance_points:
+        terrain_lines.append("<b>Surveillance retravaillee (LLM)</b><br/>" + _bullet_html(surveillance_points))
+    if not has_reworked_guidance:
+        warning_text = guidance_warning or "Validation medecin requise avant conduite a tenir retravaillee."
+        terrain_lines.append(f"<b>Conduite retravaillee</b><br/>{_escape(warning_text)}")
 
-    table = Table(
+    rows = [
         [
+            Paragraph("<b>Action list immediate</b><br/>" + _bullet_html(action_list), styles["BodySmall"]),
+            Paragraph("<b>Conduite a tenir selon le terrain</b><br/>" + "<br/><br/>".join(terrain_lines), styles["BodySmall"]),
+        ],
+        [
+            Paragraph("<b>Contingency / escalade</b><br/>" + _bullet_html(contingency), styles["BodySmall"]),
+            Paragraph(
+                "<b>Statut questionnaire / analyse</b><br/>"
+                + _escape(
+                    f"Mode {final_analysis.analysis_state.mode} - cache {final_analysis.analysis_state.cache_status} - source {final_analysis.source}/{final_analysis.llm_status}"
+                ),
+                styles["BodySmall"],
+            ),
+        ],
+    ]
+    if has_reworked_guidance and isinstance(escalation_points, list) and escalation_points:
+        rows.append(
             [
-                Paragraph("<b>Action list immediate</b><br/>" + _bullet_html(action_list), styles["BodySmall"]),
-                Paragraph("<b>Conduite a tenir selon le terrain</b><br/>" + "<br/><br/>".join(terrain_lines), styles["BodySmall"]),
-            ],
-            [
-                Paragraph("<b>Contingency / escalade</b><br/>" + _bullet_html(contingency), styles["BodySmall"]),
+                Paragraph("<b>Escalade retravaillee (LLM)</b><br/>" + _bullet_html(escalation_points), styles["BodySmall"]),
                 Paragraph(
-                    "<b>Statut questionnaire / analyse</b><br/>"
-                    + _escape(
-                        f"Mode {final_analysis.analysis_state.mode} - cache {final_analysis.analysis_state.cache_status} - source {final_analysis.source}/{final_analysis.llm_status}"
+                    "<b>Transmission retravaillee</b><br/>"
+                    + _escape(transmission_summary or "Transmission non disponible.")
+                    + (f"<br/><br/><b>Personnalisation</b><br/>{_escape(personalization_level)}" if personalization_level else "")
+                    + (f"<br/><br/><b>Validation</b><br/>{_escape(diagnosis_line)}" if diagnosis_line else "")
+                    + (
+                        f"<br/><br/><b>Sources citees</b><br/>{_escape('; '.join(guidance_sources))}"
+                        if isinstance(guidance_sources, list) and guidance_sources
+                        else ""
                     ),
                     styles["BodySmall"],
                 ),
-            ],
-        ],
-        colWidths=[width * 0.48, width * 0.52],
-    )
+            ]
+        )
+    table = Table(rows, colWidths=[width * 0.48, width * 0.52])
     table.setStyle(
         TableStyle(
             [
@@ -644,6 +683,16 @@ def _key_value_table(rows: list[list[str]], width: float, styles: StyleSheet1) -
 def _draw_page_chrome(canvas: Any, doc: Any, report: dict[str, Any]) -> None:
     canvas.saveState()
     width, height = A4
+
+    watermark_text, watermark_color = _medical_validation_watermark(report)
+    canvas.saveState()
+    canvas.setFillColor(watermark_color)
+    canvas.setFont("Helvetica-Bold", 44)
+    canvas.translate(width / 2, height / 2)
+    canvas.rotate(33)
+    canvas.drawCentredString(0, 0, watermark_text)
+    canvas.restoreState()
+
     canvas.setFillColor(REPORT_BLUE)
     canvas.rect(0, height - 18 * mm, width, 18 * mm, fill=1, stroke=0)
     canvas.setFillColor(colors.white)
@@ -661,6 +710,16 @@ def _draw_page_chrome(canvas: Any, doc: Any, report: dict[str, Any]) -> None:
     canvas.setFont("Helvetica", 8)
     canvas.drawRightString(width - 16 * mm, 8 * mm, f"Page {doc.page}")
     canvas.restoreState()
+
+
+def _medical_validation_watermark(report: dict[str, Any]) -> tuple[str, colors.Color]:
+    guidance = report.get("terrain_guidance_llm") or {}
+    decision = str(guidance.get("diagnosis_decision") or "").strip().lower()
+    diagnosis_final = str(guidance.get("diagnosis_final") or "").strip()
+    is_medically_validated = decision in {"validated", "rejected"} and bool(diagnosis_final)
+    if is_medically_validated:
+        return "VALIDATION MEDICALE", colors.HexColor("#d8f1df")
+    return "EN ATTENTE DE VALIDATION MEDICALE", colors.HexColor("#f6e8c9")
 
 
 def _format_metric(value: float | None, unit: str, decimals: int) -> str:
