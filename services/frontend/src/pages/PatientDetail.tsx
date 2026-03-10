@@ -142,6 +142,8 @@ export function PatientDetailPage() {
       (feedback) => feedback.diagnosis_decision === "validated" || feedback.diagnosis_decision === "rejected"
     ) ?? null;
   const hasMedicalValidation = pathologyReviewStatus !== "pending" || storedPathologyReview !== null;
+  const isPostValidationAnalysis =
+    hasMedicalValidation || clinicalPackage?.analysis_mode === "post_validation";
   const blindValidation = buildBlindValidationState(
     currentPathology,
     questionnaireComparison?.before ?? baselineClinicalPackage?.hypothesis_ranking ?? null,
@@ -618,6 +620,7 @@ export function PatientDetailPage() {
           : `Pathologie refusee par le medecin. Diagnostic retenu: ${finalDiagnosis}`
       );
       await refreshMlPrediction();
+      await refreshSummaryWithContext();
     } catch (error) {
       setMlMessage(error instanceof Error ? error.message : "Impossible d'enregistrer la validation pathologie");
     } finally {
@@ -966,7 +969,9 @@ export function PatientDetailPage() {
             </div>
 
             <div style={{ display: "grid", gap: 10 }}>
-              <div style={{ fontWeight: 700, color: "#0f172a" }}>Hypotheses par compatibilite</div>
+              <div style={{ fontWeight: 700, color: "#0f172a" }}>
+                {isPostValidationAnalysis ? "Diagnostic valide et risques a surveiller" : "Hypotheses par compatibilite"}
+              </div>
               {clinicalPackage.hypothesis_ranking.length === 0 ? (
                 <div style={{ color: "#64748b", fontSize: 14 }}>Aucune hypothese detaillee disponible.</div>
               ) : (
@@ -994,22 +999,47 @@ export function PatientDetailPage() {
               )}
             </div>
 
-            <ScenarioControls
-              scenario={currentPathology}
-              revealed={scenarioRevealed}
-              canReveal={blindValidation.canReveal}
-              onReveal={() => setScenarioRevealed(true)}
-              beforeHypothesis={blindValidation.before}
-              afterHypothesis={blindValidation.after}
-              verdict={blindValidation.verdict}
-              helperText={blindValidation.helperText}
-            />
+            {isPostValidationAnalysis ? (
+              <div
+                style={{
+                  borderRadius: 14,
+                  background: "#f8fafc",
+                  padding: 14,
+                  border: "1px solid #e2e8f0",
+                  display: "grid",
+                  gap: 8,
+                }}
+              >
+                <div style={{ fontWeight: 700, color: "#0f172a" }}>Validation en aveugle</div>
+                <div style={{ color: "#334155", fontSize: 14 }}>
+                  Indisponible apres validation medicale: l&apos;analyse est maintenant ancree sur le diagnostic valide et
+                  n&apos;est plus interpretable comme une lecture en aveugle du scenario.
+                </div>
+              </div>
+            ) : (
+              <ScenarioControls
+                scenario={currentPathology}
+                revealed={scenarioRevealed}
+                canReveal={blindValidation.canReveal}
+                onReveal={() => setScenarioRevealed(true)}
+                beforeHypothesis={blindValidation.before}
+                afterHypothesis={blindValidation.after}
+                verdict={blindValidation.verdict}
+                helperText={blindValidation.helperText}
+              />
+            )}
 
             {questionnaireComparison ? (
               <div style={{ display: "grid", gap: 10 }}>
-                <div style={{ fontWeight: 700, color: "#0f172a" }}>Hypotheses apres questionnaire</div>
+                <div style={{ fontWeight: 700, color: "#0f172a" }}>
+                  {isPostValidationAnalysis
+                    ? "Effet du questionnaire sur les risques a surveiller"
+                    : "Hypotheses apres questionnaire"}
+                </div>
                 <div style={{ color: "#64748b", fontSize: 14 }}>
-                  Comparatif avant / apres validation du questionnaire differentiel.
+                  {isPostValidationAnalysis
+                    ? "Comparatif avant / apres questionnaire une fois le diagnostic medical valide, pour voir quels risques restent les plus surveilles."
+                    : "Comparatif avant / apres validation du questionnaire differentiel."}
                 </div>
                 {buildHypothesisComparisonRows(
                   questionnaireComparison.before,

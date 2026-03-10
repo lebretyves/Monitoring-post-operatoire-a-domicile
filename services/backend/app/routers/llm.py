@@ -15,6 +15,7 @@ from app.llm.prompt_templates import (
     build_clinical_package_prompt,
     build_prioritization_prompt,
     build_scenario_review_prompt,
+    format_structured_grounding,
 )
 from app.llm.validated_categories import build_validated_context
 
@@ -730,6 +731,8 @@ def _cached_analysis_response(
     trigger_reason: str,
 ) -> ClinicalPackageResponse:
     payload = dict(cache_row.get("payload") or {})
+    if not payload.get("validated_diagnosis"):
+        payload["hypothesis_ranking"] = _sort_hypothesis_ranking(payload.get("hypothesis_ranking"))
     response_payload = {
         "source": cache_row.get("source", "rule-based"),
         "llm_status": cache_row.get("llm_status", "rule-based"),
@@ -781,34 +784,48 @@ async def resolve_patient_analysis(
         current_mode = str(cache_row.get("analysis_state") or "active")
         current_trigger = str(cache_row.get("trigger_reason") or "")
         current_delta = list(cache_row.get("delta_signals") or [])
+        cached_payload = dict(cache_row.get("payload") or {})
+        cached_analysis_mode = str(cached_payload.get("analysis_mode") or "pre_validation")
+        current_analysis_mode = "post_validation" if validated_context else "pre_validation"
+        cached_validated_diagnosis = str(cached_payload.get("validated_diagnosis") or "").strip()
+        current_validated_diagnosis = str(
+            validated_context.get("validated_diagnosis") if validated_context else ""
+        ).strip()
+        cache_fingerprint = str(cache_row.get("fingerprint") or "")
         if current_mode in {"resting", "stale"}:
-            backend_delta = _detect_backend_delta(cache_row.get("anchor_vitals"), last_vitals, alerts)
-            if backend_delta:
-                if current_mode != "stale" or backend_delta != current_delta:
-                    updated_row = services.postgres.update_analysis_cache_state(
-                        patient_id=patient_id,
-                        analysis_type=ANALYSIS_CACHE_TYPE,
-                        analysis_state="stale",
+            if (
+                cached_analysis_mode != current_analysis_mode
+                or cached_validated_diagnosis != current_validated_diagnosis
+            ):
+                cache_row = None
+            else:
+                backend_delta = _detect_backend_delta(cache_row.get("anchor_vitals"), last_vitals, alerts)
+                if backend_delta:
+                    if current_mode != "stale" or backend_delta != current_delta:
+                        updated_row = services.postgres.update_analysis_cache_state(
+                            patient_id=patient_id,
+                            analysis_type=ANALYSIS_CACHE_TYPE,
+                            analysis_state="stale",
+                            delta_signals=backend_delta,
+                            trigger_reason="Derive clinique au-dela du delta trigger",
+                        )
+                        if updated_row:
+                            cache_row = updated_row
+                    return _cached_analysis_response(
+                        cache_row,
+                        mode="stale",
+                        cache_status="stale",
                         delta_signals=backend_delta,
                         trigger_reason="Derive clinique au-dela du delta trigger",
                     )
-                    if updated_row:
-                        cache_row = updated_row
                 return _cached_analysis_response(
                     cache_row,
-                    mode="stale",
-                    cache_status="stale",
-                    delta_signals=backend_delta,
-                    trigger_reason="Derive clinique au-dela du delta trigger",
+                    mode=current_mode,
+                    cache_status="stale" if current_mode == "stale" else "cached",
+                    delta_signals=current_delta,
+                    trigger_reason=current_trigger,
                 )
-            return _cached_analysis_response(
-                cache_row,
-                mode=current_mode,
-                cache_status="stale" if current_mode == "stale" else "cached",
-                delta_signals=current_delta,
-                trigger_reason=current_trigger,
-            )
-        if str(cache_row.get("fingerprint") or "") == fingerprint:
+        if cache_row and cache_fingerprint == fingerprint:
             return _cached_analysis_response(
                 cache_row,
                 mode="active",
@@ -870,6 +887,8 @@ async def resolve_patient_analysis(
             "surgery_category": validated_context.get("surgery_category") if validated_context else None,
         }
     )
+    if not validated_context:
+        package_payload["hypothesis_ranking"] = _sort_hypothesis_ranking(package_payload.get("hypothesis_ranking"))
     summary_text = _summary_from_clinical_package(
         package_payload,
         patient=patient,
@@ -1139,11 +1158,24 @@ async def terrain_guidance(
 
     kb_guidance = services.knowledge_base.get_excerpt("terrain_guidance") or "source non disponible"
     kb_sources = services.knowledge_base.get_excerpt("terrain_sources") or "source non disponible"
+    structured_grounding = format_structured_grounding(
+        {
+            "patient_factors": patient_factors,
+            "perioperative_context": periop_context,
+            "free_text": free_text,
+            "questionnaire": payload.questionnaire.model_dump() if payload.questionnaire else None,
+        },
+        validated_context,
+    )
 
     prompt = (
         "Tu dois produire une conduite a tenir post-operatoire contextualisee et prudente.\n"
         "N'utilise que les donnees fournies. Ne pose pas de diagnostic certain.\n"
         "Le diagnostic medical valide est une verite de contexte: adapte la surveillance et l'escalade sans le rediscuter.\n"
+        "Les actions immediates doivent repondre aux signaux observes maintenant.\n"
+        "Les points de surveillance et criteres d'escalade doivent s'appuyer d'abord sur la base clinique structuree ci-dessous.\n"
+        "Ne cite que les items terrain/contexte qui modifient concretement la surveillance du cas actuel.\n"
+        "Les sources citees doivent correspondre uniquement aux blocs reellement utilises.\n"
         "Retourne uniquement un JSON conforme au schema.\n"
         f"Patient: {patient_id}, chirurgie: {surgery_type}, scenario observe: {scenario}.\n"
         f"Decision medecin: {diagnosis_decision}, diagnostic final: {diagnosis_final}.\n"
@@ -1157,6 +1189,7 @@ async def terrain_guidance(
         f"Personnalisation attendue: {personalization_level}.\n"
         f"Axes de surveillance prioritaires: {', '.join(category_focus.get('surveillance_points') or ['non precises'])}\n"
         f"Criteres d'escalade cibles: {', '.join(category_focus.get('escalation_triggers') or ['non precises'])}\n"
+        f"{structured_grounding}"
         f"KB guidance:\n{kb_guidance}\n"
         f"KB sources:\n{kb_sources}\n"
     )
@@ -1338,6 +1371,21 @@ def _attach_hypothesis_percentages(
         next_row["compatibility_percent"] = int(percent)
         annotated.append(next_row)
     return annotated
+
+
+def _sort_hypothesis_ranking(rows: object) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        return []
+    compatibility_rank = {"high": 2, "medium": 1, "low": 0}
+    normalized_rows = [dict(row) for row in rows if isinstance(row, dict)]
+    return sorted(
+        normalized_rows,
+        key=lambda row: (
+            float(row.get("compatibility_percent") or _compatibility_percent(str(row.get("compatibility") or "low"))),
+            compatibility_rank.get(str(row.get("compatibility") or "low"), 0),
+        ),
+        reverse=True,
+    )
 
 
 def _normalize_clinical_package(payload: dict, *, patient_id: str) -> dict:
@@ -2347,7 +2395,7 @@ def _validated_hypothesis_rows(
             "arguments_against": list(matched_row.get("arguments_against") or [])[:2],
         }
         watch_rows = [row for row in objective_rows if row is not matched_row][:2]
-        return [lead_row, *watch_rows]
+        return _attach_hypothesis_percentages([lead_row, *watch_rows])
 
     no_critical_alert = not any(str(alert.get("level") or "").upper() == "CRITICAL" for alert in alerts)
     if diagnosis_category == "stable":
@@ -2372,7 +2420,7 @@ def _validated_hypothesis_rows(
         "arguments_for": arguments_for,
         "arguments_against": arguments_against,
     }
-    return [lead_row, *objective_rows[:2]]
+    return _attach_hypothesis_percentages([lead_row, *objective_rows[:2]])
 
 
 def _fallback_clinical_package(

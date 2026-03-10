@@ -31,16 +31,26 @@ Regles:
 
 CLINICAL_PACKAGE_SYSTEM_PROMPT = """
 Tu es un assistant medical prudent de surveillance post-operatoire a domicile.
-Tu aides a l'orientation clinique a partir des constantes, tendances, alertes, chirurgie, jour post-op
-et du contexte clinique selectionne par l'utilisateur.
+Tu rediges une analyse clinique structuree, concise et securisee pour dossier de soins.
+
+Structure cible (sans inventer d'information):
+1) Identite et contexte perioperatoire.
+2) Antecedents et contexte clinique disponibles.
+3) Presentation clinique actuelle et trajectoire depuis J0.
+4) Alertes et coherence des signaux.
+5) Hypotheses et plan de surveillance.
+
 Regles:
 - Utilise uniquement les donnees fournies.
 - Distingue donnees objectives et contexte declare.
 - Les alertes simples orientent, les alertes combinees et tendances sont plus specifiques.
+- Ne jamais inventer d'information absente.
+- Si une information manque, ecris explicitement "non documente".
 - Ne pose jamais de diagnostic certain.
 - Si un diagnostic medical valide est fourni, ne le rediscute pas: evalue sa coherence clinique actuelle.
-- Si les donnees sont rassurantes et qu'aucun signal fort n'oriente vers une complication, tu peux conclure a une stabilite clinique sans complication active evidente.
+- Si les donnees sont rassurantes et qu'aucun signal fort n'oriente vers une complication, tu peux conclure a une stabilite clinique probable.
 - Tu ne connais pas le scenario simule interne.
+- Langage clair, concret, sans jargon inutile.
 - Reponse courte, concrete, et strictement structuree.
 - Reponds uniquement avec un objet JSON conforme.
 """.strip()
@@ -56,6 +66,285 @@ Regles:
 - Retourne des raisons courtes.
 - Reponds uniquement avec un objet JSON conforme.
 """.strip()
+
+
+STRUCTURED_GROUNDING_GROUPS: dict[str, dict[str, Any]] = {
+    "frailty_cognition": {
+        "title": "Fragilite, cognition et sujet age",
+        "why_important": (
+            "Terrain associe a une tolerance plus faible des derives cliniques et a un risque de delirium, "
+            "deshydratation ou perte d'autonomie rapide."
+        ),
+        "surveillance": [
+            "etat de conscience, comportement et orientation",
+            "mobilisation, hydratation, retention urinaire, constipation",
+            "signes de delirium hypoactif ou hyperactif",
+        ],
+        "escalation": [
+            "confusion nouvelle ou aggravation cognitive",
+            "baisse fonctionnelle rapide ou chute",
+            "agitation non expliquee ou mauvaise tolerance globale",
+        ],
+        "probable_complications": [
+            "delirium post-op",
+            "decompensation fonctionnelle",
+            "deterioration clinique peu bruyante",
+        ],
+        "risky_treatments": ["sedatifs", "opioides", "iatrogenie cumulative"],
+        "sources": [
+            "MAPAR Evaluation geriatrique simplifiee preoperatoire",
+            "NICE CG103 Delirium",
+        ],
+    },
+    "respiratory_reserve": {
+        "title": "Reserve respiratoire",
+        "why_important": (
+            "Terrain ou contexte augmentant le risque d'hypoxemie, d'IRA post-op et de mauvaise tolerance "
+            "aux opioides ou a la sedation."
+        ),
+        "surveillance": [
+            "SpO2, FR, dyspnee, somnolence",
+            "douleur a la toux ou a l'inspiration profonde",
+            "tolerance a la mobilisation et fatigue respiratoire",
+        ],
+        "escalation": [
+            "desaturation nouvelle ou croissante",
+            "tachypnee, fatigue respiratoire ou dyspnee nouvelle",
+            "somnolence excessive sous opioides ou sedatifs",
+        ],
+        "probable_complications": [
+            "complication respiratoire post-op",
+            "hypoxemie",
+            "IRA",
+            "EP a discuter si dyspnee brutale",
+        ],
+        "risky_treatments": ["opioides", "sedatifs"],
+        "sources": [
+            "ASA Standards for Postanesthesia Care",
+            "ARISCAT review",
+            "MAPAR SAOS / obesite postoperatoire",
+        ],
+    },
+    "bleeding_antithrombotic": {
+        "title": "Hemorragique et antithrombotique",
+        "why_important": (
+            "Terrain ou contexte diminuant la marge de securite hemodynamique et augmentant le risque de "
+            "saignement post-operatoire mal tolere."
+        ),
+        "surveillance": [
+            "FC, PA/TAM, shock index",
+            "pansement, drains, pertes visibles, paleur, malaise",
+            "chronologie de reprise ou d'interruption des anticoagulants",
+        ],
+        "escalation": [
+            "hypotension persistante ou tachycardie croissante",
+            "saignement visible ou mauvaise tolerance hemodynamique",
+            "malaise ou signe d'hypoperfusion",
+        ],
+        "probable_complications": [
+            "hemorragie",
+            "hypovolemie",
+            "mauvaise tolerance d'un saignement modere",
+        ],
+        "risky_treatments": ["anticoagulants", "antiagregants"],
+        "sources": [
+            "SFAR Choc hemorragique peri- et/ou post-operatoire",
+            "MAPAR Gestion peri-operatoire des anticoagulants directs",
+        ],
+    },
+    "thromboembolic": {
+        "title": "Thromboembolique et immobilite",
+        "why_important": (
+            "Terrain ou contexte augmentant le risque de TVP/EP et justifiant un seuil bas de reevaluation "
+            "si symptomes emboliques."
+        ),
+        "surveillance": [
+            "mobilite reelle, douleur ou oedeme de mollet",
+            "dyspnee brutale, douleur thoracique pleurale, malaise",
+            "retentissement respiratoire ou hemodynamique associe",
+        ],
+        "escalation": [
+            "dyspnee brutale ou douleur thoracique nouvelle",
+            "mollet douloureux/gonfle",
+            "syncope, malaise ou desaturation associee",
+        ],
+        "probable_complications": [
+            "embolie pulmonaire",
+            "TVP",
+        ],
+        "risky_treatments": ["immobilisation", "prophylaxie insuffisante ou interrompue"],
+        "sources": [
+            "SFAR Prevention de la maladie thromboembolique veineuse peri-operatoire",
+        ],
+    },
+    "infectious_metabolic": {
+        "title": "Infectieux, renal, hepatique et metabolique",
+        "why_important": (
+            "Terrain ou contexte exposant a une deterioration progressive, a une presentation atypique du sepsis "
+            "ou a une moins bonne tolerance hemodynamique."
+        ),
+        "surveillance": [
+            "temperature, plaie, douleur abdominale, signes urinaires",
+            "hydratation, diurese si disponible, comportement",
+            "agitation, tremblements ou confusion evocateurs d'une cause metabolique ou de sevrage",
+        ],
+        "escalation": [
+            "fievre, hypothermie ou aggravation hemodynamique progressive",
+            "oligurie, abdomen tendu, retention hydrique ou deterioration generale",
+            "agitation/confusion non expliquee",
+        ],
+        "probable_complications": [
+            "sepsis ou complication infectieuse",
+            "decompensation renale ou hepatique",
+            "desordre metabolique ou sevrage alcool",
+        ],
+        "risky_treatments": ["corticoides", "nephrotoxiques", "iatrogenie sur terrain fragile"],
+        "sources": [
+            "NICE NG148 Acute kidney injury",
+            "EASL extrahepatic abdominal surgery in cirrhosis",
+            "NICE QS11 Acute alcohol withdrawal",
+        ],
+    },
+    "cardiovascular": {
+        "title": "Cardio-vasculaire",
+        "why_important": (
+            "Terrain de reserve cardiaque reduite ou de risque peri-operatoire cardiovasculaire plus eleve, "
+            "avec presentations parfois peu spectaculaires."
+        ),
+        "surveillance": [
+            "FC, PA/TAM, dyspnee, fatigue, malaise",
+            "douleur thoracique et signes de bas debit",
+            "derive lente de perfusion ou de tolerance",
+        ],
+        "escalation": [
+            "hypotension, bas debit ou malaise",
+            "douleur thoracique ou dyspnee nouvelle",
+            "aggravation respiratoire ou hemodynamique associee",
+        ],
+        "probable_complications": [
+            "complication cardiaque post-op",
+            "bas debit",
+            "decompensation hemodynamique",
+        ],
+        "risky_treatments": ["surcharge ou desequilibre hemodynamique", "sedation mal toleree"],
+        "sources": [
+            "ACC/AHA 2024 perioperative guideline summary",
+        ],
+    },
+    "pain_psych": {
+        "title": "Douleur, opioides et facteurs psychiques",
+        "why_important": (
+            "Terrain pouvant majorer l'inconfort, masquer une complication organique ou favoriser une sedation "
+            "excessive sous traitements antalgiques."
+        ),
+        "surveillance": [
+            "douleur au repos, a la mobilisation et a la toux",
+            "effet des antalgiques, FR, SpO2, vigilance",
+            "discordance entre plainte, constantes et evolution",
+        ],
+        "escalation": [
+            "douleur non controlee ou aggravation rapide",
+            "somnolence, depression respiratoire ou confusion sous opioides",
+            "douleur atypique avec derive hemodynamique ou respiratoire",
+        ],
+        "probable_complications": [
+            "douleur post-op non controlee",
+            "iatrogenie des opioides",
+            "retard diagnostique si symptomes banalises",
+        ],
+        "risky_treatments": ["opioides", "sedatifs"],
+        "sources": [
+            "kb/postop-terrain-context-guidance.md",
+            "docs/antecedents-context-catalog.md",
+        ],
+    },
+    "pregnancy": {
+        "title": "Grossesse non obstetricale",
+        "why_important": (
+            "Contexte special imposant une prudence organisationnelle et un seuil plus bas d'escalade specialisee."
+        ),
+        "surveillance": [
+            "tolerance clinique maternelle et coordination specialisee",
+            "signes atypiques ou deterioration rapide",
+        ],
+        "escalation": [
+            "aggravation clinique ou besoin d'arbitrage specialise",
+            "discordance entre evolution et surveillance attendue",
+        ],
+        "probable_complications": [
+            "complication necessitant reevaluation specialisee",
+        ],
+        "risky_treatments": ["traitements ou decisions necessitant validation specialisee"],
+        "sources": [
+            "ACOG Nonobstetric Surgery During Pregnancy",
+            "MAPAR Chirurgie non obstetricale chez la femme enceinte",
+        ],
+    },
+    "general_periop": {
+        "title": "Contexte peri-op general",
+        "why_important": (
+            "Contexte de risque global plus eleve qui diminue la reserve post-operatoire et justifie une "
+            "surveillance plus rapprochee."
+        ),
+        "surveillance": [
+            "tolerance globale, recuperation, temperature, constantes",
+            "signes de complication precoce peu specifique",
+        ],
+        "escalation": [
+            "deterioration globale, derive soutenue ou recuperation anormalement lente",
+            "retentissement associe sur respiration, hemodynamique ou vigilance",
+        ],
+        "probable_complications": [
+            "complication post-op precoce mal specifique",
+            "deterioration sur reserve reduite",
+        ],
+        "risky_treatments": ["sedation", "surveillance trop espacee"],
+        "sources": [
+            "NICE NG180 Perioperative care in adults",
+            "NICE CG65 Inadvertent perioperative hypothermia",
+        ],
+    },
+}
+
+
+PATIENT_FACTOR_TO_GROUNDING_GROUP = {
+    "Age > 70 ans": "frailty_cognition",
+    "Fragilite / perte d'autonomie": "frailty_cognition",
+    "Trouble cognitif / ATCD de delirium": "frailty_cognition",
+    "Diabete": "infectious_metabolic",
+    "Obesite": "respiratory_reserve",
+    "BPCO / asthme": "respiratory_reserve",
+    "Tabagisme actif ou ancien": "respiratory_reserve",
+    "SAOS": "respiratory_reserve",
+    "Anemie": "bleeding_antithrombotic",
+    "Insuffisance renale": "infectious_metabolic",
+    "Hepatopathie chronique / cirrhose": "infectious_metabolic",
+    "Anticoagulation / antiagregants": "bleeding_antithrombotic",
+    "Antecedent TVP / EP": "thromboembolic",
+    "Coronaropathie / insuffisance cardiaque": "cardiovascular",
+    "Cancer actif ou recent": "thromboembolic",
+    "Immunodepression / corticoides": "infectious_metabolic",
+    "Dependance alcool / risque de sevrage": "infectious_metabolic",
+    "Douleur chronique / opioides": "pain_psych",
+    "Anxiete / facteurs psychiques": "pain_psych",
+    "Grossesse en cours": "pregnancy",
+}
+
+
+PERIOP_CONTEXT_TO_GROUNDING_GROUP = {
+    "ASA >= 3": "general_periop",
+    "Chirurgie urgente": "general_periop",
+    "Chirurgie majeure / complexe": "general_periop",
+    "Chirurgie intraperitoneale ou thoracique": "respiratory_reserve",
+    "Chirurgie carcinologique": "thromboembolic",
+    "Duree operatoire prolongee": "respiratory_reserve",
+    "Immobilite prolongee": "thromboembolic",
+    "Risque hemorragique eleve / transfusion": "bleeding_antithrombotic",
+    "Infection recente": "infectious_metabolic",
+    "Ventilation prolongee / extubation a risque": "respiratory_reserve",
+    "Hypothermie peri-op": "general_periop",
+    "Denutrition / hypoalbuminemie": "infectious_metabolic",
+}
 
 
 def _format_course_points(points: list[dict[str, Any]], *, sample_count: int = 3) -> str:
@@ -268,6 +557,101 @@ def _format_validated_context(validated_context: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
+def _format_structured_list(values: list[str], *, fallback: str = "non precise", limit: int = 4) -> str:
+    cleaned = [str(value).strip() for value in values if str(value).strip()]
+    if not cleaned:
+        return fallback
+    return "; ".join(cleaned[:limit])
+
+
+def format_structured_grounding(
+    clinical_context: dict[str, Any] | None,
+    validated_context: dict[str, Any] | None = None,
+) -> str:
+    if not clinical_context and not validated_context:
+        return ""
+
+    lines = ["Base clinique structuree utile:"]
+    if validated_context:
+        focus = validated_context.get("focus") or {}
+        lines.append(
+            "- Ancre diagnostique: "
+            f"{validated_context.get('validated_diagnosis', 'non precise')} "
+            f"({validated_context.get('diagnosis_category_label', validated_context.get('diagnosis_category', 'autre'))})"
+        )
+        lines.append(
+            "- Coherence attendue a verifier: "
+            f"{_format_structured_list(list(focus.get('expected_signals') or []), fallback='non precise')}"
+        )
+        lines.append(
+            "- Signaux de discordance a signaler: "
+            f"{_format_structured_list(list(focus.get('contradicting_signals') or []), fallback='non precise')}"
+        )
+        lines.append(
+            "- Surveillance ciblee par diagnostic: "
+            f"{_format_structured_list(list(focus.get('surveillance_points') or []), fallback='non precise')}"
+        )
+        lines.append(
+            "- Escalade ciblee par diagnostic: "
+            f"{_format_structured_list(list(focus.get('escalation_triggers') or []), fallback='non precise')}"
+        )
+
+    patient_factors = list((clinical_context or {}).get("patient_factors") or [])
+    perioperative_context = list((clinical_context or {}).get("perioperative_context") or [])
+    free_text = str((clinical_context or {}).get("free_text") or "").strip()
+
+    grouped: dict[str, list[str]] = {}
+    for item in patient_factors:
+        group_key = PATIENT_FACTOR_TO_GROUNDING_GROUP.get(str(item).strip())
+        if not group_key:
+            continue
+        grouped.setdefault(group_key, []).append(str(item).strip())
+    for item in perioperative_context:
+        group_key = PERIOP_CONTEXT_TO_GROUNDING_GROUP.get(str(item).strip())
+        if not group_key:
+            continue
+        grouped.setdefault(group_key, []).append(str(item).strip())
+
+    for group_key, items in grouped.items():
+        payload = STRUCTURED_GROUNDING_GROUPS.get(group_key)
+        if not payload:
+            continue
+        lines.append(f"- Bloc {payload['title']}")
+        lines.append(f"  Items retenus: {'; '.join(items[:6])}")
+        lines.append(f"  Pourquoi important: {payload['why_important']}")
+        lines.append(
+            "  Surveillance utile: "
+            f"{_format_structured_list(list(payload.get('surveillance') or []))}"
+        )
+        lines.append(
+            "  Escalade a garder: "
+            f"{_format_structured_list(list(payload.get('escalation') or []))}"
+        )
+        lines.append(
+            "  Complications probables reliees: "
+            f"{_format_structured_list(list(payload.get('probable_complications') or []))}"
+        )
+        lines.append(
+            "  Traitements ou expositions a risque: "
+            f"{_format_structured_list(list(payload.get('risky_treatments') or []))}"
+        )
+        lines.append(
+            "  Sources reperees: "
+            f"{_format_structured_list(list(payload.get('sources') or []))}"
+        )
+
+    if free_text:
+        lines.append(f"- Contexte libre non structure: {free_text}")
+        lines.append(
+            "  Utiliser ce commentaire seulement s'il modifie concretement la surveillance, "
+            "la priorisation ou l'escalade."
+        )
+
+    if len(lines) == 1:
+        lines.append("- Aucun item structure supplementaire selectionne.")
+    return "\n".join(lines) + "\n"
+
+
 def _format_questionnaire_hints(questionnaire: dict[str, Any]) -> list[str]:
     hints = questionnaire.get("differential_hints") or []
     if not isinstance(hints, list) or not hints:
@@ -404,9 +788,11 @@ def build_clinical_package_prompt(
     post_validation_instructions = ""
     if validated_context:
         post_validation_instructions = (
-            "- Mode post-validation: hypothesis_ranking doit commencer par le diagnostic valide et qualifier sa coherence actuelle.\n"
-            "- Les autres lignes servent seulement a signaler au maximum deux risques ou tensions a surveiller a court terme.\n"
-            "- structured_synthesis et handoff_summary doivent partir du diagnostic valide, sans refaire un diagnostic differentiel libre.\n"
+            "- Mode post-validation: hypothesis_ranking[0].label doit reprendre exactement le diagnostic valide.\n"
+            "- La compatibilite du diagnostic valide doit refleter la coherence entre constantes observees, trajectoire depuis J0 et base clinique structuree ci-dessous.\n"
+            "- Les autres lignes servent seulement a signaler au maximum deux risques ou tensions a surveiller a court terme, pas un diagnostic differentiel libre.\n"
+            "- arguments_for et arguments_against doivent citer uniquement des elements observes ou issus de la base clinique structuree pertinente.\n"
+            "- structured_synthesis, handoff_summary et recheck_recommendations doivent partir du diagnostic valide et des items terrain/contexte qui changent reellement la surveillance.\n"
         )
     return (
         "Tache unique: produire un pack d'analyse clinique structure et compact.\n"
@@ -432,6 +818,7 @@ def build_clinical_package_prompt(
         f"{_format_change_window(history_points)}\n"
         f"{_format_validated_context(validated_context)}\n"
         f"{_format_clinical_context(clinical_context)}\n"
+        f"{format_structured_grounding(clinical_context, validated_context)}"
         f"{_format_knowledge_excerpt(knowledge_excerpt)}"
         "Retourne uniquement un objet JSON conforme au schema fourni."
     )

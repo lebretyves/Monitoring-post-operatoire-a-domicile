@@ -323,6 +323,132 @@ def test_post_validation_analysis_uses_categories() -> None:
                 assert package_payload["validated_diagnosis"] == "Constantes post-operatoires stables"
                 assert package_payload["diagnosis_category"] == "stable"
                 assert package_payload["surgery_category"] == "abdominale"
+                assert package_payload["hypothesis_ranking"][0]["label"] == "Constantes post-operatoires stables"
+                assert sum(row["compatibility_percent"] for row in package_payload["hypothesis_ranking"]) == 100
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_post_validation_prompts_include_structured_grounding() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                reading = {
+                    "ts": "2026-03-04T10:00:00Z",
+                    "patient_id": "PAT-002",
+                    "profile": "baseline_normale",
+                    "scenario": "pneumonia_ira",
+                    "scenario_label": "Complication respiratoire",
+                    "hr": 108,
+                    "spo2": 91,
+                    "sbp": 118,
+                    "dbp": 72,
+                    "map": 87,
+                    "rr": 25,
+                    "temp": 38.1,
+                    "room": "A102",
+                    "battery": 96,
+                    "postop_day": 2,
+                    "surgery_type": "chirurgie thoracique",
+                    "shock_index": round(108 / 118, 2),
+                }
+                services.state.push(reading)
+                services.last_vitals["PAT-002"] = reading
+                services.influx.write_vital(reading)
+
+                feedback_response = client.post(
+                    "/api/ml/PAT-002/feedback",
+                    json={
+                        "decision": "validate",
+                        "target": "critical",
+                        "pathology": "Complication respiratoire",
+                        "diagnosis_decision": "validated",
+                        "final_diagnosis": "Pneumopathie post-operatoire",
+                        "comment": "Validation medecin avec terrain respiratoire et hemorragique a surveiller.",
+                    },
+                )
+                assert feedback_response.status_code == 200
+
+                captured_prompts: list[str] = []
+
+                async def fake_generate_structured(prompt: str, schema: dict, *, system: str | None = None):
+                    captured_prompts.append(prompt)
+                    if "structured_synthesis" in schema.get("required", []):
+                        return {
+                            "structured_synthesis": "Synthese test.",
+                            "alert_explanations": ["Alerte test."],
+                            "hypothesis_ranking": [
+                                {
+                                    "label": "Pneumopathie post-operatoire",
+                                    "compatibility": "high",
+                                    "compatibility_percent": 72,
+                                    "arguments_for": ["Desaturation et fievre."],
+                                    "arguments_against": ["Pas de contradiction majeure."],
+                                },
+                                {
+                                    "label": "Hemorragie / hypovolemie possible",
+                                    "compatibility": "medium",
+                                    "compatibility_percent": 18,
+                                    "arguments_for": ["Tachycardie."],
+                                    "arguments_against": ["Pas de saignement visible."],
+                                },
+                            ],
+                            "trajectory_status": "worsening",
+                            "trajectory_explanation": "Derive respiratoire progressive.",
+                            "recheck_recommendations": ["Recontroler rapidement."],
+                            "handoff_summary": "Transmission test.",
+                            "scenario_consistency": "Coherence test.",
+                        }
+                    return {
+                        "immediate_actions": ["Reevaluation rapide."],
+                        "surveillance_points": ["Surveiller SpO2 et FR."],
+                        "escalation_triggers": ["Desaturation ou aggravation respiratoire."],
+                        "transmission_summary": "Transmission test.",
+                        "cited_sources": ["ASA Standards for Postanesthesia Care"],
+                    }
+
+                services.llm_client.generate_structured = fake_generate_structured
+
+                context_payload = {
+                    "patient_factors": ["BPCO / asthme", "Anemie"],
+                    "perioperative_context": [
+                        "Ventilation prolongee / extubation a risque",
+                        "Risque hemorragique eleve / transfusion",
+                    ],
+                    "free_text": "terrain mixte a surveiller de facon ciblee",
+                }
+
+                clinical_response = client.post(
+                    "/api/llm/PAT-002/clinical-package",
+                    json=context_payload,
+                )
+                assert clinical_response.status_code == 200
+
+                terrain_response = client.post(
+                    "/api/llm/PAT-002/terrain-guidance",
+                    json=context_payload,
+                )
+                assert terrain_response.status_code == 200
+
+                assert len(captured_prompts) == 2
+                clinical_prompt, terrain_prompt = captured_prompts
+                assert "Base clinique structuree utile:" in clinical_prompt
+                assert "Ancre diagnostique: Pneumopathie post-operatoire" in clinical_prompt
+                assert "Bloc Reserve respiratoire" in clinical_prompt
+                assert "Items retenus: BPCO / asthme; Ventilation prolongee / extubation a risque" in clinical_prompt
+                assert "Bloc Hemorragique et antithrombotique" in clinical_prompt
+                assert "Sources reperees: ASA Standards for Postanesthesia Care" in clinical_prompt
+
+                assert "Les points de surveillance et criteres d'escalade doivent s'appuyer d'abord sur la base clinique structuree ci-dessous." in terrain_prompt
+                assert "Bloc Reserve respiratoire" in terrain_prompt
+                assert "Bloc Hemorragique et antithrombotique" in terrain_prompt
     finally:
         if previous_runtime_dir is None:
             os.environ.pop("ML_RUNTIME_DIR", None)
@@ -371,6 +497,88 @@ def test_stable_patient_without_questionnaire_keeps_stable_analysis() -> None:
                 assert payload["trajectory_status"] == "stable"
                 assert payload["hypothesis_ranking"][0]["label"] == "Etat post-operatoire stable sans complication active evidente"
                 assert "stable" in payload["scenario_consistency"].lower()
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_pre_validation_hypotheses_follow_compatibility_order() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                reading = {
+                    "ts": "2026-03-04T10:00:00Z",
+                    "patient_id": "PAT-004",
+                    "profile": "baseline_normale",
+                    "scenario": "hemorrhage_j2",
+                    "scenario_label": "Hemorragie post-op",
+                    "hr": 108,
+                    "spo2": 95,
+                    "sbp": 98,
+                    "dbp": 61,
+                    "map": 73,
+                    "rr": 20,
+                    "temp": 36.9,
+                    "room": "A104",
+                    "battery": 97,
+                    "postop_day": 2,
+                    "surgery_type": "chirurgie colorectale",
+                    "shock_index": round(108 / 98, 2),
+                }
+                services.state.push(reading)
+                services.last_vitals["PAT-004"] = reading
+                services.influx.write_vital(reading)
+
+                async def fake_generate_structured(prompt: str, schema: dict, *, system: str | None = None):
+                    return {
+                        "structured_synthesis": "Synthese test volontairement desordonnee.",
+                        "alert_explanations": ["Alerte test."],
+                        "hypothesis_ranking": [
+                            {
+                                "label": "Complication cardiaque post-op possible",
+                                "compatibility": "medium",
+                                "compatibility_percent": 38,
+                                "arguments_for": ["Argument test cardiaque."],
+                                "arguments_against": ["Contre argument test cardiaque."],
+                            },
+                            {
+                                "label": "Hemorragie / hypovolemie possible",
+                                "compatibility": "medium",
+                                "compatibility_percent": 48,
+                                "arguments_for": ["Argument test hemorragie."],
+                                "arguments_against": ["Contre argument test hemorragie."],
+                            },
+                            {
+                                "label": "Sepsis / complication infectieuse possible",
+                                "compatibility": "low",
+                                "compatibility_percent": 14,
+                                "arguments_for": ["Argument test sepsis."],
+                                "arguments_against": ["Contre argument test sepsis."],
+                            },
+                        ],
+                        "trajectory_status": "worsening",
+                        "trajectory_explanation": "Derive test.",
+                        "recheck_recommendations": ["Recontroler rapidement."],
+                        "handoff_summary": "Transmission test.",
+                        "scenario_consistency": "Coherence test.",
+                    }
+
+                services.llm_client.generate_structured = fake_generate_structured
+
+                response = client.get("/api/llm/PAT-004/clinical-package")
+                assert response.status_code == 200
+                payload = response.json()
+                assert payload["source"] == "ollama"
+                assert payload["hypothesis_ranking"][0]["label"] == "Hemorragie / hypovolemie possible"
+                assert payload["hypothesis_ranking"][0]["compatibility_percent"] == 48
+                assert payload["hypothesis_ranking"][1]["label"] == "Complication cardiaque post-op possible"
+                assert payload["hypothesis_ranking"][1]["compatibility_percent"] == 38
     finally:
         if previous_runtime_dir is None:
             os.environ.pop("ML_RUNTIME_DIR", None)
@@ -1051,6 +1259,118 @@ def test_clinical_package_cache_and_resting_state_persist() -> None:
                 assert stale_payload["analysis_state"]["delta_signals"]
                 assert stale_payload["questionnaire_baseline_hypothesis_ranking"]
                 assert stale_payload["summary_text"] == resting_payload["summary_text"]
+    finally:
+        if previous_runtime_dir is None:
+            os.environ.pop("ML_RUNTIME_DIR", None)
+        else:
+            os.environ["ML_RUNTIME_DIR"] = previous_runtime_dir
+
+
+def test_validation_invalidates_resting_clinical_package_cache() -> None:
+    previous_runtime_dir = os.environ.get("ML_RUNTIME_DIR")
+    try:
+        with TemporaryDirectory() as runtime_dir:
+            os.environ["ML_RUNTIME_DIR"] = runtime_dir
+            app = create_app(test_mode=True)
+            with TestClient(app) as client:
+                services = client.app.state.services
+                history = [
+                    {
+                        "ts": "2026-03-04T08:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "respiratory_case_to_characterize",
+                        "scenario_label": "Detresse respiratoire a caracteriser",
+                        "hr": 80,
+                        "spo2": 97,
+                        "sbp": 124,
+                        "dbp": 78,
+                        "map": 93,
+                        "rr": 16,
+                        "temp": 36.8,
+                        "room": "A102",
+                        "battery": 96,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(80 / 124, 2),
+                    },
+                    {
+                        "ts": "2026-03-05T14:00:00Z",
+                        "patient_id": "PAT-002",
+                        "profile": "baseline_normale",
+                        "scenario": "respiratory_case_to_characterize",
+                        "scenario_label": "Detresse respiratoire a caracteriser",
+                        "hr": 106,
+                        "spo2": 93,
+                        "sbp": 118,
+                        "dbp": 74,
+                        "map": 89,
+                        "rr": 24,
+                        "temp": 38.2,
+                        "room": "A102",
+                        "battery": 94,
+                        "postop_day": 2,
+                        "surgery_type": "chirurgie thoracique",
+                        "shock_index": round(106 / 118, 2),
+                    },
+                ]
+                for reading in history:
+                    services.state.push(reading)
+                    services.influx.write_vital(reading)
+                services.last_vitals["PAT-002"] = history[-1]
+
+                questionnaire_response = client.post(
+                    "/api/llm/PAT-002/clinical-package",
+                    json={
+                        "questionnaire": {
+                            "responder": "ide",
+                            "comment": "essoufflement brutal avec douleur pleurale et mollet gonfle",
+                            "answers": [
+                                {
+                                    "module_id": "respiratory_differential",
+                                    "question_id": "dyspnea_onset",
+                                    "answer": "brutal",
+                                },
+                                {
+                                    "module_id": "respiratory_differential",
+                                    "question_id": "chest_pain_type",
+                                    "answer": "pleurale",
+                                },
+                                {
+                                    "module_id": "respiratory_differential",
+                                    "question_id": "calf_pain_swelling",
+                                    "answer": "yes",
+                                },
+                            ],
+                        }
+                    },
+                )
+                assert questionnaire_response.status_code == 200
+                questionnaire_payload = questionnaire_response.json()
+                assert questionnaire_payload["analysis_mode"] == "pre_validation"
+                assert questionnaire_payload["analysis_state"]["mode"] == "resting"
+
+                feedback_response = client.post(
+                    "/api/ml/PAT-002/feedback",
+                    json={
+                        "decision": "validate",
+                        "target": "critical",
+                        "pathology": "Detresse respiratoire a caracteriser",
+                        "diagnosis_decision": "validated",
+                        "final_diagnosis": "Embolie pulmonaire",
+                        "final_diagnosis_class": "embolie_pulmonaire",
+                        "comment": "Validation medicale apres questionnaire.",
+                    },
+                )
+                assert feedback_response.status_code == 200
+
+                refreshed_response = client.get("/api/llm/PAT-002/clinical-package")
+                assert refreshed_response.status_code == 200
+                refreshed_payload = refreshed_response.json()
+                assert refreshed_payload["analysis_mode"] == "post_validation"
+                assert refreshed_payload["validated_diagnosis"] == "Embolie pulmonaire"
+                assert refreshed_payload["hypothesis_ranking"][0]["label"] == "Embolie pulmonaire"
+                assert sum(row["compatibility_percent"] for row in refreshed_payload["hypothesis_ranking"]) == 100
     finally:
         if previous_runtime_dir is None:
             os.environ.pop("ML_RUNTIME_DIR", None)
