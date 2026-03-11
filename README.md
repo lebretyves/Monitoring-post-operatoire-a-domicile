@@ -95,6 +95,52 @@ La logique reste volontairement hybride:
 - `IsolationForest` pour le bonus anomalies
 - Ollama local avec `qwen2.5:7b-instruct` pour le bonus LLM
 
+## Schema structurel du projet
+
+```mermaid
+flowchart TB
+    ROOT[postop-monitoring/]
+
+    ROOT --> START[start.sh / start-demo.ps1 / start-demo.cmd]
+    ROOT --> CFG[config/]
+    ROOT --> DOCS[docs/]
+    ROOT --> KB[kb/]
+    ROOT --> INFRA[infra/]
+    ROOT --> RUNTIME[runtime/]
+    ROOT --> SCRIPTS[scripts/]
+    ROOT --> BACK[services/backend/]
+    ROOT --> FRONT[services/frontend/]
+    ROOT --> SIM[services/simulator/]
+
+    BACK --> B1[app/routers]
+    BACK --> B2[app/alerting]
+    BACK --> B3[app/ml]
+    BACK --> B4[app/llm]
+    BACK --> B5[app/storage]
+    BACK --> B6[app/services/reports]
+    BACK --> B7[app/tests]
+
+    FRONT --> F1[src/pages]
+    FRONT --> F2[src/components]
+    FRONT --> F3[src/api]
+    FRONT --> F4[src/types]
+
+    SIM --> S1[app/ simulation]
+    CFG --> C1[scenarios + seeds + regles]
+    KB --> K1[support clinique LLM]
+    RUNTIME --> R1[artefacts ML locaux]
+```
+
+Lecture rapide:
+
+- `start.sh` et `start-demo.ps1` servent de points d'entree pour lancer la stack
+- `config/` contient les scenarios, seeds patients et regles
+- `services/backend/` porte la logique centrale: ingestion, alertes, ML, LLM, stockage et exports
+- `services/frontend/` porte l'interface React du dashboard
+- `services/simulator/` genere les constantes vitales simulees
+- `kb/` contient la base de connaissances locale exploitee par le LLM
+- `runtime/` stocke les artefacts locaux comme les fichiers ML
+
 ## Activation des fonctions
 
 Les flags principaux sont definis dans [`.env.example`](./.env.example):
@@ -128,7 +174,7 @@ flowchart LR
     WS --> FE
     FE --> SW
 
-    SIM -->|patients/{id}/vitals| MQTT
+    SIM -->|topic vitals patient| MQTT
     API -->|refresh demo| MQTT
     MQTT --> API
 
