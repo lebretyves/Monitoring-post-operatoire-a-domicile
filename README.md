@@ -10,36 +10,62 @@ Le systeme vise une assistance clinique prudente et explicable. Il ne remplace p
 
 ## Demarrage rapide
 
-Point d'entree recommande: [`start.sh`](./start.sh). Commencez par ce script pour lancer toute la demo; le reste du README detaille ensuite l'architecture et les fonctions.
+Commande recommande pour macOS et Windows: `docker compose up --build -d`. C'est le point d'entree principal du projet, a lancer depuis le dossier racine clone (`postop-monitoring/`).
 
 Prerequis:
 
 - Docker Desktop ou Docker Engine avec `docker compose`
-- Bash / Git Bash pour `start.sh`
+- lancer les commandes depuis le dossier racine du projet clone (`postop-monitoring/`)
 
-Commande:
+Commande principale:
 
 ```bash
-cd /c/Users/lebre/Desktop/Monitoring/postop-monitoring
+docker compose up --build -d
+```
+
+Si vous partez d'un nouveau clone:
+
+```bash
+git clone <url-du-repo>
+cd postop-monitoring
+docker compose up --build -d
+```
+
+Cette commande:
+
+- construit et demarre toute la stack
+- marche directement dans Terminal sur macOS et dans PowerShell sur Windows
+- ne demande pas Bash / Git Bash
+
+## Scripts de secours
+
+Si vous preferez les scripts du projet, ou si vous voulez les verifications additionnelles (`.env`, attente HTTP, demarrage de Docker Desktop), utilisez:
+
+- [`start.sh`](./start.sh) sur macOS / Linux / Git Bash
+- [`start-demo.ps1`](./start-demo.ps1) sur Windows PowerShell
+
+### Secours macOS / Linux / Git Bash
+
+```bash
 NO_BROWSER=1 ./start.sh
 ```
 
-Ce script:
-
-- verifie `docker`
-- cree `.env` depuis `.env.example` si besoin
-- valide `docker compose`
-- construit et demarre toute la stack
-- attend que le backend et le frontend soient joignables
-
 `start.sh` a ete verifie dans Bash / Git Bash.
 
-## Alternatives Windows
-
-Si vous utilisez PowerShell ou Terminal Windows, utilisez plutot [`start-demo.ps1`](./start-demo.ps1):
+Depuis PowerShell, vous pouvez aussi appeler le meme script via Git Bash sans ouvrir un terminal Git Bash:
 
 ```powershell
-cd c:\Users\lebre\Desktop\Monitoring\postop-monitoring
+$env:NO_BROWSER = "1"
+& "$Env:ProgramFiles\Git\bin\bash.exe" "./start.sh"
+```
+
+Commande a lancer depuis le dossier racine du projet. Si Git n'est pas installe dans `C:\Program Files\Git`, adaptez le chemin vers `bash.exe`.
+
+### Secours Windows
+
+Si vous utilisez PowerShell ou Terminal Windows, utilisez [`start-demo.ps1`](./start-demo.ps1):
+
+```powershell
 .\start-demo.ps1
 ```
 
@@ -133,7 +159,8 @@ flowchart TB
 
 Lecture rapide:
 
-- `start.sh` et `start-demo.ps1` servent de points d'entree pour lancer la stack
+- `docker compose up --build -d` est la commande principale cross-platform pour lancer la stack
+- `start.sh` et `start-demo.ps1` restent disponibles comme scripts de secours
 - `config/` contient les scenarios, seeds patients et regles
 - `services/backend/` porte la logique centrale: ingestion, alertes, ML, LLM, stockage et exports
 - `services/frontend/` porte l'interface React du dashboard
@@ -465,7 +492,13 @@ postop-monitoring/
 
 ## Commandes utiles
 
-`start.sh` reste le point d'entree principal. Les commandes ci-dessous servent surtout au support, au debug et a la demo.
+Commande principale:
+
+```bash
+docker compose up --build -d
+```
+
+Les commandes ci-dessous servent surtout au support, au debug et a la demo.
 
 ```bash
 make up
