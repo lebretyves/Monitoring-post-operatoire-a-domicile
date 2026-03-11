@@ -4,12 +4,78 @@ Projet MBA1 Epitech de monitoring post-operatoire a domicile.
 
 Le projet simule plusieurs patients, envoie leurs constantes via MQTT, applique des regles d'alerte, calcule un score ML de criticite, produit une analyse clinique assistee par LLM, puis expose le tout dans un dashboard web temps reel.
 
+Pipeline principal: simulation -> MQTT -> backend -> stockage -> frontend -> export / notification.
+
+Le systeme vise une assistance clinique prudente et explicable. Il ne remplace pas un diagnostic medical autonome.
+
+## Demarrage rapide
+
+Point d'entree recommande: [`start.sh`](./start.sh). Commencez par ce script pour lancer toute la demo; le reste du README detaille ensuite l'architecture et les fonctions.
+
+Prerequis:
+
+- Docker Desktop ou Docker Engine avec `docker compose`
+- Bash / Git Bash pour `start.sh`
+
+Commande:
+
+```bash
+cd /c/Users/lebre/Desktop/Monitoring/postop-monitoring
+NO_BROWSER=1 ./start.sh
+```
+
+Ce script:
+
+- verifie `docker`
+- cree `.env` depuis `.env.example` si besoin
+- valide `docker compose`
+- construit et demarre toute la stack
+- attend que le backend et le frontend soient joignables
+
+`start.sh` a ete verifie dans Bash / Git Bash.
+
+## Alternatives Windows
+
+Si vous utilisez PowerShell ou Terminal Windows, utilisez plutot [`start-demo.ps1`](./start-demo.ps1):
+
+```powershell
+cd c:\Users\lebre\Desktop\Monitoring\postop-monitoring
+.\start-demo.ps1
+```
+
+Ce script demarre aussi Docker Desktop si le daemon n'est pas deja pret.
+
+Alternative double-clic / Windows:
+
+```bat
+start-demo.cmd
+```
+
+Equivalent `make`:
+
+```bash
+make start-demo
+```
+
+## URLs utiles
+
+- Frontend: `http://localhost:5173`
+- Backend API: `http://localhost:8000`
+- Backend docs: `http://localhost:8000/docs`
+- Healthcheck: `http://localhost:8000/health`
+- Healthcheck LLM: `http://localhost:8000/health/llm`
+- InfluxDB: `http://localhost:8086`
+- PostgreSQL: `localhost:5432`
+- Mosquitto MQTT: `localhost:1883`
+
 ## Objectif
 
 - simuler un suivi post-operatoire multi-patients
 - visualiser les constantes et alertes en temps reel
 - aider l'orientation clinique avec une logique hybride
 - fournir un support de demo simple a lancer
+
+## Approche hybride
 
 La logique reste volontairement hybride:
 
@@ -25,54 +91,18 @@ La logique reste volontairement hybride:
 - InfluxDB pour l'historique des constantes
 - PostgreSQL pour les patients, alertes, cache d'analyse, notifications et feedback ML
 - React + Vite pour le dashboard
+- `LogisticRegression` pour le score ML de criticite
 - `IsolationForest` pour le bonus anomalies
 - Ollama local avec `qwen2.5:7b-instruct` pour le bonus LLM
 
-## Demarrage principal
+## Activation des fonctions
 
-Le lancement principal du projet se fait avec [`start.sh`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\start.sh).
+Les flags principaux sont definis dans [`.env.example`](./.env.example):
 
-Ce script:
-
-- verifie `docker`
-- cree `.env` depuis `.env.example` si besoin
-- valide `docker compose`
-- construit et demarre toute la stack
-- attend que le backend et le frontend soient joignables
-
-Commande:
-
-```bash
-cd /c/Users/lebre/Desktop/Monitoring/postop-monitoring
-NO_BROWSER=1 ./start.sh
-```
-
-Le script a ete verifie: il fonctionne bien dans un terminal Bash/Git Bash.
-
-## Alternative Windows
-
-Si vous utilisez PowerShell ou Terminal Windows, utilisez plutot [`start-demo.ps1`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\start-demo.ps1):
-
-```powershell
-cd c:\Users\lebre\Desktop\Monitoring\postop-monitoring
-.\start-demo.ps1
-```
-
-Alternative double-clic / Windows:
-
-```bat
-start-demo.cmd
-```
-
-## URLs utiles
-
-- Frontend: `http://localhost:5173`
-- Backend API: `http://localhost:8000`
-- Backend docs: `http://localhost:8000/docs`
-- Healthcheck: `http://localhost:8000/health`
-- InfluxDB: `http://localhost:8086`
-- PostgreSQL: `localhost:5432`
-- Mosquitto MQTT: `localhost:1883`
+- `ENABLE_ML=true`: active le score ML de criticite et les services ML associes
+- `ENABLE_LLM=false`: active les routes LLM sur Ollama; sinon le backend reste sur un fallback local `rule-based`
+- `ENABLE_WEBPUSH=false`: active les abonnements push navigateur via service worker + backend
+- `APP_TEST_MODE=false`: force le backend en mode test, desactive le LLM et bascule les stockages principaux sur des implementations memoire
 
 ## Schema d'architecture
 
@@ -117,7 +147,7 @@ flowchart LR
 - le front affiche le tableau de bord, les graphes, les hypotheses et les scores
 - le ML apprend la criticite a partir des vitals et feedbacks
 - le LLM reformule l'analyse clinique et la conduite a tenir
-- le PDF synthese le cas clinique exporte
+- le PDF synthetise le cas clinique exporte
 
 ## Services Docker
 
@@ -178,46 +208,46 @@ Le backend se repartit en couches distinctes.
 - `Ingestion temps reel`
   - recoit les constantes MQTT
   - met a jour l'etat patient, l'historique et les alertes
-  - fichiers: [`consumer.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\mqtt\consumer.py), [`engine.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\alerting\engine.py)
+  - fichiers: [`consumer.py`](./services/backend/app/mqtt/consumer.py), [`engine.py`](./services/backend/app/alerting/engine.py)
 
 - `Regles et criticite immediate`
   - detecte les seuils franchis et les alertes composites
   - alimente les alertes `INFO / WARNING / CRITICAL`
-  - fichiers: [`engine.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\alerting\engine.py), [`alert_rules.json`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\config\alert_rules.json)
+  - fichiers: [`engine.py`](./services/backend/app/alerting/engine.py), [`alert_rules.json`](./config/alert_rules.json)
 
 - `ML de criticite`
   - construit les features de trajectoire
   - enregistre `vitals.csv` et `labeled_feedback.csv`
   - entraine `model.pkl`
   - calcule le `Score ML historique`
-  - fichiers: [`criticity_service.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\ml\criticity_service.py), [`features.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\ml\features.py), [`ml.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\routers\ml.py)
+  - fichiers: [`criticity_service.py`](./services/backend/app/ml/criticity_service.py), [`features.py`](./services/backend/app/ml/features.py), [`ml.py`](./services/backend/app/routers/ml.py)
 
 - `Analyse clinique IA`
   - construit le `clinical-package`
   - fusionne vitals, historique, alertes, questionnaire, validation medicale et KB locale
   - appelle le LLM si disponible, sinon fallback `rule-based`
-  - fichiers: [`llm.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\routers\llm.py), [`prompt_templates.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\llm\prompt_templates.py), [`validated_categories.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\llm\validated_categories.py), [`kb.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\llm\kb.py)
+  - fichiers: [`llm.py`](./services/backend/app/routers/llm.py), [`prompt_templates.py`](./services/backend/app/llm/prompt_templates.py), [`validated_categories.py`](./services/backend/app/llm/validated_categories.py), [`kb.py`](./services/backend/app/llm/kb.py)
 
 - `Questionnaire differentiel`
   - choisit les modules de questions selon le tableau clinique
   - renvoie des indices pour reorienter les hypotheses
-  - fichiers: [`questionnaire.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\llm\questionnaire.py), [`questionnaire_rules.json`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\config\questionnaire_rules.json)
+  - fichiers: [`questionnaire.py`](./services/backend/app/llm/questionnaire.py), [`questionnaire_rules.json`](./config/questionnaire_rules.json)
 
 - `Validation medicale`
   - enregistre le diagnostic final et le commentaire
   - bascule l'analyse du mode `pre-validation` au mode `post-validation`
   - ne reentraine pas automatiquement le modele ML
-  - fichiers: [`ml.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\routers\ml.py), [`postgres.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\storage\postgres.py)
+  - fichiers: [`ml.py`](./services/backend/app/routers/ml.py), [`postgres.py`](./services/backend/app/storage/postgres.py)
 
 - `Conduite a tenir`
   - genere une guidance post-validation
   - adapte la surveillance et les criteres d'escalade au diagnostic valide
-  - fichiers: [`llm.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\routers\llm.py), [`postop-terrain-context-guidance.md`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\kb\postop-terrain-context-guidance.md)
+  - fichiers: [`llm.py`](./services/backend/app/routers/llm.py), [`postop-terrain-context-guidance.md`](./kb/postop-terrain-context-guidance.md)
 
 - `PDF et exports`
   - assemble les donnees cliniques, la validation medicale, la conduite a tenir et les courbes
   - genere le PDF final
-  - fichiers: [`clinical_report_service.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\services\reports\clinical_report_service.py), [`pdf_renderer.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\services\reports\pdf_renderer.py), [`export.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\routers\export.py)
+  - fichiers: [`clinical_report_service.py`](./services/backend/app/services/reports/clinical_report_service.py), [`pdf_renderer.py`](./services/backend/app/services/reports/pdf_renderer.py), [`export.py`](./services/backend/app/routers/export.py)
 
 ## Separation regles / ML / LLM
 
@@ -228,11 +258,12 @@ Le backend se repartit en couches distinctes.
 
 - `ML`
   - apprend la criticite a partir de l'historique
+  - s'appuie sur une pipeline `StandardScaler + LogisticRegression`
   - produit un score longitudinal
   - ne choisit pas seul le diagnostic clinique final
 
 - `LLM`
-  - explique, synthétise et reformule
+  - explique, synthetise et reformule
   - integre questionnaire, contexte patient et validation medicale
   - n'est pas fine-tune par le projet
 
@@ -336,35 +367,36 @@ postop-monitoring/
 
 ## Role des dossiers principaux
 
-- [`config`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\config): configuration clinique et scenarios
-- [`docs`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs): documentation technique et clinique
-- [`kb`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\kb): base de connaissances courte utilisee par le LLM
-- [`runtime`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\runtime): donnees et artefacts locaux non versionnes
-- [`services/backend`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend): logique centrale du projet
-- [`services/frontend`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\frontend): dashboard web
-- [`services/simulator`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\simulator): generation des constantes
+- [`config`](./config): configuration clinique et scenarios
+- [`docs`](./docs): documentation technique et clinique
+- [`kb`](./kb): base de connaissances courte utilisee par le LLM
+- [`runtime`](./runtime): donnees et artefacts locaux non versionnes
+- [`services/backend`](./services/backend): logique centrale du projet
+- [`services/frontend`](./services/frontend): dashboard web
+- [`services/simulator`](./services/simulator): generation des constantes
 
 ## Fichiers backend importants
 
-- [`main.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\main.py): assemblage de l'application
-- [`routers/llm.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\routers\llm.py): analyse clinique, questionnaire, conduite a tenir
-- [`routers/ml.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\routers\ml.py): prediction et feedback ML
-- [`mqtt/consumer.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\mqtt\consumer.py): ingestion temps reel
-- [`alerting/engine.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\alerting\engine.py): regles d'alerte
-- [`ml/criticity_service.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\ml\criticity_service.py): entrainement et prediction
-- [`services/reports/clinical_report_service.py`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\backend\app\services\reports\clinical_report_service.py): construction du rapport clinique
+- [`main.py`](./services/backend/app/main.py): assemblage de l'application
+- [`routers/llm.py`](./services/backend/app/routers/llm.py): analyse clinique, questionnaire, conduite a tenir
+- [`routers/ml.py`](./services/backend/app/routers/ml.py): prediction et feedback ML
+- [`mqtt/consumer.py`](./services/backend/app/mqtt/consumer.py): ingestion temps reel
+- [`alerting/engine.py`](./services/backend/app/alerting/engine.py): regles d'alerte
+- [`ml/criticity_service.py`](./services/backend/app/ml/criticity_service.py): entrainement et prediction
+- [`services/reports/clinical_report_service.py`](./services/backend/app/services/reports/clinical_report_service.py): construction du rapport clinique
 
 ## Fichiers frontend importants
 
-- [`main.tsx`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\frontend\src\main.tsx): bootstrap de l'application
-- [`pages/Patients.tsx`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\frontend\src\pages\Patients.tsx): liste des patients
-- [`pages/PatientDetail.tsx`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\frontend\src\pages\PatientDetail.tsx): ecran principal patient
-- [`api/http.ts`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\frontend\src\api\http.ts): appels REST
-- [`api/ws.ts`](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\services\frontend\src\api\ws.ts): flux live
+- [`main.tsx`](./services/frontend/src/main.tsx): bootstrap de l'application
+- [`pages/Patients.tsx`](./services/frontend/src/pages/Patients.tsx): liste des patients
+- [`pages/PatientDetail.tsx`](./services/frontend/src/pages/PatientDetail.tsx): ecran principal patient
+- [`api/http.ts`](./services/frontend/src/api/http.ts): appels REST
+- [`api/ws.ts`](./services/frontend/src/api/ws.ts): flux live
 
 ## Endpoints principaux
 
 - `GET /health`
+- `GET /health/llm`
 - `GET /api/patients`
 - `GET /api/patients/{patient_id}/last-vitals`
 - `GET /api/trends/{patient_id}?metric=all&hours=24`
@@ -386,6 +418,8 @@ postop-monitoring/
 - `WS /ws/live`
 
 ## Commandes utiles
+
+`start.sh` reste le point d'entree principal. Les commandes ci-dessous servent surtout au support, au debug et a la demo.
 
 ```bash
 make up
@@ -416,8 +450,8 @@ Le projet utilise par defaut `qwen2.5:7b-instruct` via Ollama.
 
 Fichiers utiles:
 
-- [docs/llm-local.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\llm-local.md)
-- [setup_ollama_model.ps1](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\scripts\setup_ollama_model.ps1)
+- [docs/llm-local.md](./docs/llm-local.md)
+- [setup_ollama_model.ps1](./scripts/setup_ollama_model.ps1)
 
 Exemple d'activation:
 
@@ -439,12 +473,12 @@ Le backend retombe en `rule-based` si le LLM est indisponible ou trop lent.
 
 ## References utiles du projet
 
-- [docs/architecture.mmd](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\architecture.mmd)
-- [docs/case-generation.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\case-generation.md)
-- [docs/clinical-references.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\clinical-references.md)
-- [docs/antecedents-context-catalog.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\antecedents-context-catalog.md)
-- [docs/questionnaire-differentiel.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\docs\questionnaire-differentiel.md)
-- [kb/postop-home-monitoring-signs.md](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\kb\postop-home-monitoring-signs.md)
-- [config/alert_rules.json](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\config\alert_rules.json)
-- [config/simulation_scenarios.json](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\config\simulation_scenarios.json)
-- [config/patients_seed.json](c:\Users\lebre\Desktop\Monitoring\postop-monitoring\config\patients_seed.json)
+- [docs/architecture.mmd](./docs/architecture.mmd)
+- [docs/case-generation.md](./docs/case-generation.md)
+- [docs/clinical-references.md](./docs/clinical-references.md)
+- [docs/antecedents-context-catalog.md](./docs/antecedents-context-catalog.md)
+- [docs/questionnaire-differentiel.md](./docs/questionnaire-differentiel.md)
+- [kb/postop-home-monitoring-signs.md](./kb/postop-home-monitoring-signs.md)
+- [config/alert_rules.json](./config/alert_rules.json)
+- [config/simulation_scenarios.json](./config/simulation_scenarios.json)
+- [config/patients_seed.json](./config/patients_seed.json)
