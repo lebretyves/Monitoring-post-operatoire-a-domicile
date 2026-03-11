@@ -80,10 +80,10 @@ def render_clinical_report_pdf(report: dict[str, Any]) -> bytes:
         PageBreak(),
         _section_header("Hypotheses cliniques IA", width, styles),
         _hypothesis_table(
-            report["baseline_analysis"].hypothesis_ranking,
+            report["final_analysis"].hypothesis_ranking,
             width,
             styles,
-            title="Lecture initiale des hypotheses",
+            title="Lecture finale retenue",
         ),
     ]
 
@@ -220,8 +220,9 @@ def _section_header(title: str, width: float, styles: StyleSheet1) -> Table:
 def _identity_table(report: dict[str, Any], width: float, styles: StyleSheet1) -> Table:
     patient = report["patient"]
     last_vitals = report["last_vitals"]
+    patient_label = str(report["patient_id"])
     rows = [
-        ["Patient ref", report["patient_id"], "Patient", patient.get("full_name", report["patient_id"])],
+        ["Patient ref", patient_label, "Patient", patient_label],
         ["Intervention", last_vitals.get("surgery_type", patient.get("surgery_type", "non renseignee")), "Jour post-op", _format_postop_day(last_vitals.get("postop_day", patient.get("postop_day")))],
         ["Chambre", str(last_vitals.get("room") or patient.get("room") or "N/A"), "Scenario observe", report["scenario_label"]],
         ["Derniere mesure", _format_datetime(report["last_vitals_timestamp"]), "Export", _format_datetime(report["exported_at"])],
@@ -231,12 +232,17 @@ def _identity_table(report: dict[str, Any], width: float, styles: StyleSheet1) -
 
 def _status_table(report: dict[str, Any], width: float, styles: StyleSheet1) -> Table:
     final_analysis = report["final_analysis"]
+    terrain_guidance_llm = report.get("terrain_guidance_llm") or {}
+    diagnosis_decision = str(terrain_guidance_llm.get("diagnosis_decision") or "").strip()
+    diagnosis_final = str(terrain_guidance_llm.get("diagnosis_final") or "").strip()
+    diagnosis_status = f"{diagnosis_decision} - {diagnosis_final}" if diagnosis_decision and diagnosis_final else "non valide"
     level = str(final_analysis.explanatory_score.level).upper()
     questionnaire_status = "oui" if report["adjusted_analysis"] else "non"
     rows = [
         ["Gravite clinique", level, "Source analyse", f"{final_analysis.source} / {final_analysis.llm_status}"],
         ["Score explicatif", str(final_analysis.explanatory_score.score), "Etat analyse", final_analysis.analysis_state.mode],
         ["Questionnaire applique", questionnaire_status, "Alertes recentes", str(len(report["alerts"]))],
+        ["Diagnostic medecin", diagnosis_status, "Hypothese dominante", report.get("leading_hypothesis") or "non documente"],
     ]
     return _key_value_table(rows, width, styles)
 
@@ -499,7 +505,7 @@ def _analysis_notes_block(report: dict[str, Any], width: float, styles: StyleShe
                 "Lecture finale retenue",
                 [
                     f"Hypothese dominante: {report['leading_hypothesis']}",
-                    final_analysis.summary_text,
+                    f"Trajectoire: {final_analysis.trajectory_status}",
                 ],
             )
         )
@@ -534,6 +540,8 @@ def _analysis_notes_block(report: dict[str, Any], width: float, styles: StyleShe
 def _action_tables(report: dict[str, Any], width: float, styles: StyleSheet1) -> Table:
     final_analysis = report["final_analysis"]
     terrain_guidance_llm = report.get("terrain_guidance_llm") or {}
+    patient_history = report.get("patient", {}).get("history") or []
+    history_block = _bullet_html([str(item) for item in patient_history]) if patient_history else "Aucun antecedent structure disponible."
     has_reworked_guidance = bool(terrain_guidance_llm.get("available"))
     action_list = (
         terrain_guidance_llm.get("immediate_actions")
@@ -571,7 +579,14 @@ def _action_tables(report: dict[str, Any], width: float, styles: StyleSheet1) ->
     rows = [
         [
             Paragraph("<b>Action list immediate</b><br/>" + _bullet_html(action_list), styles["BodySmall"]),
-            Paragraph("<b>Conduite a tenir selon le terrain</b><br/>" + "<br/><br/>".join(terrain_lines), styles["BodySmall"]),
+            Paragraph(
+                "<b>Conduite a tenir selon le terrain</b><br/>"
+                + "<b>Antecedents pris en compte</b><br/>"
+                + history_block
+                + "<br/><br/>"
+                + "<br/><br/>".join(terrain_lines),
+                styles["BodySmall"],
+            ),
         ],
         [
             Paragraph("<b>Contingency / escalade</b><br/>" + _bullet_html(contingency), styles["BodySmall"]),
@@ -627,7 +642,17 @@ def _action_tables(report: dict[str, Any], width: float, styles: StyleSheet1) ->
 
 def _paragraph_block(title: str, lines: list[str], width: float, styles: StyleSheet1) -> Table:
     cleaned = [line.strip() for line in lines if line and line.strip()]
-    content = "<br/><br/>".join(_escape(line) for line in cleaned) if cleaned else "Aucun contenu disponible."
+    unique_lines: list[str] = []
+    normalized_seen: list[str] = []
+    for line in cleaned:
+        normalized = " ".join(line.lower().split())
+        if not normalized:
+            continue
+        if any(normalized == seen or normalized in seen or seen in normalized for seen in normalized_seen):
+            continue
+        normalized_seen.append(normalized)
+        unique_lines.append(line)
+    content = "<br/><br/>".join(_escape(line) for line in unique_lines) if unique_lines else "Aucun contenu disponible."
     return _paragraph_panel(title, content, width, styles)
 
 
